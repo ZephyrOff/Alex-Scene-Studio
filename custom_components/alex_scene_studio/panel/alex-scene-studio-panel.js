@@ -40,6 +40,11 @@ function distance(a, b) {
 const CLOSE_THRESHOLD = 15; // unites SVG, distance sous laquelle un clic pres du premier point ferme le contour
 const VIEWBOX_W = 800;
 const VIEWBOX_H = 500;
+const GRID_SIZE = 20; // unites SVG entre deux lignes de la grille -- meme pas utilise pour l'accroche des points de mur
+
+function snapToGrid(v) {
+  return Math.round(v / GRID_SIZE) * GRID_SIZE;
+}
 
 const MOUNT_TYPE_LABELS = { ceiling: "Plafond", wall: "Mur", desk: "Bureau" };
 const MOUNT_TYPE_ICONS = { ceiling: "\u2B24", wall: "\u25A0", desk: "\u25B2" }; // cercle / carre / triangle plein, distinction visuelle rapide sans dependre d'icones externes
@@ -59,11 +64,17 @@ class AlexSceneStudioPanel extends HTMLElement {
     this._roomName = "";
     this._points = []; // contour, ferme des que _closed = true
     this._closed = false;
-    this._lights = []; // {entity_id, x, y, mount_type}
+    this._lights = []; // {entity_id, x, y, mount_type, height, direction}
 
     // Selections courantes pour le placement de la prochaine lumiere.
     this._pendingEntity = "";
     this._pendingMountType = "ceiling";
+    this._pendingHeight = 2.2; // metres, valeur de depart raisonnable (hauteur sous plafond courante)
+    this._pendingDirection = "direct";
+
+    // Glisser-depose : point de mur ou lumiere en cours de deplacement.
+    // { kind: "point"|"light", index: N, startX, startY } ou null.
+    this._dragging = null;
   }
 
   set hass(hass) {
@@ -110,6 +121,9 @@ class AlexSceneStudioPanel extends HTMLElement {
     this._lights = [];
     this._pendingEntity = "";
     this._pendingMountType = "ceiling";
+    this._pendingHeight = 2.2;
+    this._pendingDirection = "direct";
+    this._dragging = null;
   }
 
   _loadRoomIntoEditor(room) {
@@ -117,7 +131,13 @@ class AlexSceneStudioPanel extends HTMLElement {
     this._roomName = room.name;
     this._points = room.points.map((p) => ({ x: p.x, y: p.y }));
     this._closed = this._points.length >= 3;
-    this._lights = room.lights.map((l) => ({ ...l }));
+    // height/direction : repli sur des valeurs par defaut pour les pieces
+    // enregistrees avant l'ajout de ces deux champs.
+    this._lights = room.lights.map((l) => ({
+      height: 2.2,
+      direction: "direct",
+      ...l,
+    }));
     this._syncEditorInputs();
     this._renderCanvas();
     this._renderLightsList();
@@ -252,7 +272,21 @@ class AlexSceneStudioPanel extends HTMLElement {
                 <option value="desk">Bureau</option>
               </select>
             </div>
-            <div class="hint">Choisis la lumière et le type ci-dessus, puis clique dans le contour pour la placer.</div>
+            <div class="row">
+              <label>Hauteur (m)</label>
+              <input type="number" id="height-input" min="0" max="10" step="0.1" value="2.2" />
+            </div>
+            <div class="row">
+              <label>Direction</label>
+              <select id="direction-select">
+                <option value="direct">Direct</option>
+                <option value="indirect">Indirect</option>
+              </select>
+            </div>
+            <div class="hint">
+              Choisis la lumière et ses réglages ci-dessus, puis clique dans le contour pour la placer.
+              Une fois placée, glisse-la directement dans le plan pour la repositionner.
+            </div>
             <div id="lights-list" style="margin-top:12px;"></div>
           </div>
 
@@ -294,10 +328,20 @@ class AlexSceneStudioPanel extends HTMLElement {
     this.shadowRoot.querySelector("#mount-select").addEventListener("change", (ev) => {
       this._pendingMountType = ev.target.value;
     });
+    this.shadowRoot.querySelector("#height-input").addEventListener("input", (ev) => {
+      const v = parseFloat(ev.target.value);
+      this._pendingHeight = Number.isFinite(v) ? v : 2.2;
+    });
+    this.shadowRoot.querySelector("#direction-select").addEventListener("change", (ev) => {
+      this._pendingDirection = ev.target.value;
+    });
     this.shadowRoot.querySelector("#save-room-btn").addEventListener("click", () => this._saveRoom());
 
     const svg = this.shadowRoot.querySelector("#plan");
     svg.addEventListener("click", (ev) => this._onCanvasClick(ev));
+    svg.addEventListener("pointermove", (ev) => this._onCanvasPointerMove(ev));
+    svg.addEventListener("pointerup", () => this._onCanvasPointerUp());
+    svg.addEventListener("pointerleave", () => this._onCanvasPointerUp());
 
     this._populateEntitySelect();
     this._renderCanvas();
@@ -338,6 +382,14 @@ class AlexSceneStudioPanel extends HTMLElement {
   }
 
   _onCanvasClick(ev) {
+    // Un clic qui suit immediatement un glisser-depose ne doit pas EN PLUS
+    // ajouter un point ou placer une lumiere -- sans ce garde-fou, relacher
+    // le glissement declenche aussi un "click" fantome au meme endroit.
+    if (this._justDragged) {
+      this._justDragged = false;
+      return;
+    }
+
     const p = this._svgPointFromEvent(ev);
 
     if (!this._closed) {
@@ -348,7 +400,7 @@ class AlexSceneStudioPanel extends HTMLElement {
         this._renderLightsList();
         return;
       }
-      this._points.push(p);
+      this._points.push({ x: snapToGrid(p.x), y: snapToGrid(p.y) });
       this._renderCanvas();
       return;
     }
@@ -356,7 +408,57 @@ class AlexSceneStudioPanel extends HTMLElement {
     // Mode placement des lumieres : seulement a l'interieur du contour.
     if (!this._pendingEntity) return;
     if (!pointInPolygon(p, this._points)) return;
-    this._lights.push({ entity_id: this._pendingEntity, x: p.x, y: p.y, mount_type: this._pendingMountType });
+    this._lights.push({
+      entity_id: this._pendingEntity,
+      x: p.x,
+      y: p.y,
+      mount_type: this._pendingMountType,
+      height: this._pendingHeight,
+      direction: this._pendingDirection,
+    });
+    this._renderCanvas();
+    this._renderLightsList();
+  }
+
+  // -----------------------------------------------------------------------
+  // Glisser-depose des points de mur et des lumieres deja places. pointerdown
+  // demarre sur le marqueur lui-meme (attache apres chaque rendu, voir
+  // _renderCanvas) ; pointermove/pointerup sont sur le SVG entier pour ne
+  // pas perdre le geste si le curseur sort brievement du marqueur.
+  // -----------------------------------------------------------------------
+  _onMarkerPointerDown(ev, kind, index) {
+    ev.stopPropagation();
+    const source = kind === "point" ? this._points[index] : this._lights[index];
+    this._dragging = { kind, index, startX: source.x, startY: source.y, moved: false };
+  }
+
+  _onCanvasPointerMove(ev) {
+    if (!this._dragging) return;
+    const p = this._svgPointFromEvent(ev);
+    this._dragging.moved = true;
+    if (this._dragging.kind === "point") {
+      this._points[this._dragging.index] = { x: snapToGrid(p.x), y: snapToGrid(p.y) };
+    } else {
+      this._lights[this._dragging.index].x = p.x;
+      this._lights[this._dragging.index].y = p.y;
+    }
+    this._renderCanvas();
+  }
+
+  _onCanvasPointerUp() {
+    if (!this._dragging) return;
+    const { kind, index, startX, startY, moved } = this._dragging;
+    if (kind === "light" && moved) {
+      // Une lumiere deposee hors du contour revient a sa position de depart
+      // plutot que d'accepter une position invalide.
+      const l = this._lights[index];
+      if (!pointInPolygon(l, this._points)) {
+        l.x = startX;
+        l.y = startY;
+      }
+    }
+    this._justDragged = moved;
+    this._dragging = null;
     this._renderCanvas();
     this._renderLightsList();
   }
@@ -370,8 +472,8 @@ class AlexSceneStudioPanel extends HTMLElement {
     if (lightsCard) lightsCard.style.display = this._closed ? "block" : "none";
     if (drawHint) {
       drawHint.textContent = this._closed
-        ? "Contour terminé. Clique dans « Recommencer le contour » pour le retracer."
-        : "Clique dans le plan pour placer les coins du contour. Clique près du premier point pour refermer.";
+        ? "Contour terminé. Glisse un point ou une lumière pour la repositionner ; « Recommencer le contour » pour tout retracer."
+        : "Clique dans le plan pour placer les coins du contour (accroché à la grille). Clique près du premier point pour refermer.";
     }
 
     const pointsAttr = this._points.map((p) => `${p.x},${p.y}`).join(" ");
@@ -384,27 +486,48 @@ class AlexSceneStudioPanel extends HTMLElement {
     const cornerDots = this._points
       .map(
         (p, i) =>
-          `<circle cx="${p.x}" cy="${p.y}" r="5" fill="${i === 0 ? "#f4a935" : "#03a9f4"}" stroke="white" stroke-width="1" />`
+          `<circle class="wall-point" data-point-index="${i}" cx="${p.x}" cy="${p.y}" r="7"
+             fill="${i === 0 ? "#f4a935" : "#03a9f4"}" stroke="white" stroke-width="1.5"
+             style="cursor:grab;" />`
       )
       .join("");
 
     const lightMarkers = this._lights
-      .map((l) => {
+      .map((l, i) => {
         const color = l.mount_type === "ceiling" ? "#f4a935" : l.mount_type === "wall" ? "#4caf50" : "#e91e63";
         return `
-          <g>
-            <circle cx="${l.x}" cy="${l.y}" r="9" fill="${color}" stroke="white" stroke-width="1.5" opacity="0.9" />
-            <text x="${l.x}" y="${l.y + 3}" font-size="9" text-anchor="middle" fill="white">${MOUNT_TYPE_ICONS[l.mount_type] || ""}</text>
+          <g class="light-marker" data-light-index="${i}" style="cursor:grab;">
+            <circle cx="${l.x}" cy="${l.y}" r="10" fill="${color}" stroke="white" stroke-width="1.5" opacity="0.9" />
+            <text x="${l.x}" y="${l.y + 3}" font-size="9" text-anchor="middle" fill="white" style="pointer-events:none;">${MOUNT_TYPE_ICONS[l.mount_type] || ""}</text>
           </g>`;
       })
       .join("");
 
+    // Grille de fond façon papier quadrille -- aide purement visuelle, les
+    // points de mur s'accrochent en plus reellement a ce pas (snapToGrid).
     svg.innerHTML = `
+      <defs>
+        <pattern id="grid" width="${GRID_SIZE}" height="${GRID_SIZE}" patternUnits="userSpaceOnUse">
+          <path d="M ${GRID_SIZE} 0 L 0 0 0 ${GRID_SIZE}" fill="none" stroke="rgba(255,255,255,0.08)" stroke-width="1" />
+        </pattern>
+      </defs>
       <rect x="0" y="0" width="${VIEWBOX_W}" height="${VIEWBOX_H}" fill="rgba(255,255,255,0.02)" />
+      <rect x="0" y="0" width="${VIEWBOX_W}" height="${VIEWBOX_H}" fill="url(#grid)" />
       ${shapeEl}
       ${cornerDots}
       ${lightMarkers}
     `;
+
+    svg.querySelectorAll(".wall-point").forEach((el) => {
+      el.addEventListener("pointerdown", (ev) =>
+        this._onMarkerPointerDown(ev, "point", parseInt(el.getAttribute("data-point-index"), 10))
+      );
+    });
+    svg.querySelectorAll(".light-marker").forEach((el) => {
+      el.addEventListener("pointerdown", (ev) =>
+        this._onMarkerPointerDown(ev, "light", parseInt(el.getAttribute("data-light-index"), 10))
+      );
+    });
   }
 
   _renderLightsList() {
@@ -421,12 +544,31 @@ class AlexSceneStudioPanel extends HTMLElement {
         return `
           <div class="light-item" data-index="${i}">
             <span>${MOUNT_TYPE_ICONS[l.mount_type] || ""}</span>
-            <span>${escapeHtml(name)}</span>
+            <span style="flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">${escapeHtml(name)}</span>
             <span style="color:var(--secondary-text-color);">(${MOUNT_TYPE_LABELS[l.mount_type] || l.mount_type})</span>
+            <input type="number" class="light-height" data-index="${i}" min="0" max="10" step="0.1"
+                   value="${l.height != null ? l.height : 2.2}" style="width:56px;flex:0 0 56px;" title="Hauteur (m)" />
+            <select class="light-direction" data-index="${i}" style="flex:0 0 90px;" title="Direction">
+              <option value="direct" ${l.direction !== "indirect" ? "selected" : ""}>Direct</option>
+              <option value="indirect" ${l.direction === "indirect" ? "selected" : ""}>Indirect</option>
+            </select>
             <span class="del-btn" data-del-index="${i}">✕</span>
           </div>`;
       })
       .join("");
+    list.querySelectorAll(".light-height").forEach((el) => {
+      el.addEventListener("input", (ev) => {
+        const idx = parseInt(el.getAttribute("data-index"), 10);
+        const v = parseFloat(ev.target.value);
+        this._lights[idx].height = Number.isFinite(v) ? v : 2.2;
+      });
+    });
+    list.querySelectorAll(".light-direction").forEach((el) => {
+      el.addEventListener("change", (ev) => {
+        const idx = parseInt(el.getAttribute("data-index"), 10);
+        this._lights[idx].direction = ev.target.value;
+      });
+    });
     list.querySelectorAll("[data-del-index]").forEach((el) => {
       el.addEventListener("click", () => {
         const idx = parseInt(el.getAttribute("data-del-index"), 10);

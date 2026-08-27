@@ -23,7 +23,7 @@ from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers.storage import Store
 
-from .const import DOMAIN, MOUNT_TYPES, PANEL_ICON, PANEL_TITLE, PANEL_URL_PATH, STORAGE_KEY, STORAGE_VERSION
+from .const import DOMAIN, DIRECTION_TYPES, MOUNT_TYPES, PANEL_ICON, PANEL_TITLE, PANEL_URL_PATH, STORAGE_KEY, STORAGE_VERSION
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -34,6 +34,8 @@ class LightPosition:
     x: float
     y: float
     mount_type: str  # "ceiling" | "wall" | "desk"
+    height: float = 2.2  # metres
+    direction: str = "direct"  # "direct" | "indirect"
 
 
 @dataclass
@@ -51,6 +53,8 @@ LIGHT_SCHEMA = {
     vol.Required("x"): vol.Coerce(float),
     vol.Required("y"): vol.Coerce(float),
     vol.Required("mount_type"): vol.In(MOUNT_TYPES),
+    vol.Optional("height", default=2.2): vol.Coerce(float),
+    vol.Optional("direction", default="direct"): vol.In(DIRECTION_TYPES),
 }
 
 SAVE_ROOM_SCHEMA = {

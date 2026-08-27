@@ -13,3 +13,9 @@ PANEL_ICON = "mdi:floor-plan"
 # fonctionnel dans l'algorithme d'harmonie (phase 2, pas encore construite) :
 # plafond = eclairage general, mur = accent, bureau = tache.
 MOUNT_TYPES = ("ceiling", "wall", "desk")
+
+# Direct = source visible eclairant la piece ; indirect = lumiere rebondie
+# sur une surface (corniche, uplighter...) -- influencera plus tard
+# l'algorithme d'harmonie (contribution differente a la couleur/l'ambiance
+# percue de la piece).
+DIRECTION_TYPES = ("direct", "indirect")

@@ -30,17 +30,25 @@ aux comptes administrateurs**.
 ## Utilisation
 
 1. **Dessiner le contour** — clique dans le plan pour placer les coins de la
-   pièce, dans l'ordre. Reclique près du premier point pour refermer le
+   pièce, dans l'ordre (accroché à la grille visible, pour tracer des murs
+   droits facilement). Reclique près du premier point pour refermer le
    contour. Contour **polygonal libre** (pas limité à un rectangle) —
    fonctionne pour des pièces en L, en T, en U, etc. « Annuler le dernier
    point » retire le dernier coin posé ; « Recommencer le contour » repart de
-   zéro.
+   zéro. **Un point déjà posé peut être glissé** pour corriger une erreur,
+   à tout moment (pendant le tracé ou après fermeture).
 2. **Positionner les lumières** — une fois le contour fermé, choisis une
-   lumière et son type de montage (Plafond / Mur / Bureau), puis clique à
-   l'intérieur du contour pour la placer. Le type de montage n'a pas encore
-   d'effet dans cette version — il sera utilisé par l'algorithme d'harmonie
-   d'une phase ultérieure pour distinguer éclairage général (plafond),
-   accent (mur), et tâche (bureau).
+   lumière, son type de montage (Plafond / Mur / Bureau), sa **hauteur** (en
+   mètres) et sa **direction** (Direct / Indirect — une source visible vs. une
+   lumière rebondie sur une surface), puis clique à l'intérieur du contour
+   pour la placer. **Une lumière déjà placée peut être glissée** directement
+   dans le plan pour la repositionner — si elle est déposée hors du contour,
+   elle revient automatiquement à sa position précédente. Hauteur et
+   direction restent modifiables après coup, directement dans la liste des
+   lumières placées. Aucun de ces réglages n'a encore d'effet dans cette
+   version — ils seront utilisés par l'algorithme d'harmonie d'une phase
+   ultérieure (type de montage et direction pour le rôle fonctionnel/la
+   contribution à l'ambiance, hauteur pour affiner le calcul).
 3. **Enregistrer** — donne un nom à la pièce et clique sur « Enregistrer la
    pièce ». Réutilise le même nom de pièce pour la mettre à jour plutôt que
    d'en créer une nouvelle (sélectionne-la d'abord dans la liste à gauche).
