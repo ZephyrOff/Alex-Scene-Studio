@@ -1,0 +1,13 @@
+{
+  "config": {
+    "step": {
+      "user": {
+        "title": "Alex Scene Studio",
+        "description": "Configure Alex Scene Studio pour dessiner le plan de tes pièces, positionner tes lumières, et (dans une future version) obtenir des suggestions de scènes harmonieuses basées sur leur disposition."
+      }
+    },
+    "abort": {
+      "already_configured": "Déjà configuré"
+    }
+  }
+}

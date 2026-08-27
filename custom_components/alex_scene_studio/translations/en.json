@@ -1,0 +1,13 @@
+{
+  "config": {
+    "step": {
+      "user": {
+        "title": "Alex Scene Studio",
+        "description": "Set up Alex Scene Studio to draw room floor plans, position your lights, and (in a future version) get harmonious scene suggestions based on their layout."
+      }
+    },
+    "abort": {
+      "already_configured": "Already configured"
+    }
+  }
+}
