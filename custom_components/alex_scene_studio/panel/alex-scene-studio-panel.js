@@ -793,9 +793,18 @@ class AlexSceneStudioPanel extends HTMLElement {
       payload.brightness = this._sceneManualBri;
     }
 
-    const result = await this._hass.callWS(payload);
-    this._suggestions = (result && result.suggestions) || [];
-    this._previewMode = true;
+    try {
+      const result = await this._hass.callWS(payload);
+      this._suggestions = (result && result.suggestions) || [];
+      if (!this._suggestions.length) {
+        alert("Aucune proposition générée -- vérifie qu'il y a bien des lumières placées dans cette pièce.");
+      }
+    } catch (err) {
+      console.error("Alex Scene Studio - échec de compute_scene :", err);
+      alert(`Échec de la génération : ${(err && err.message) || err}`);
+      this._suggestions = null;
+    }
+    this._previewMode = !!(this._suggestions && this._suggestions.length);
     this._renderCanvas();
     this._renderScenePreviewList();
   }
@@ -805,7 +814,12 @@ class AlexSceneStudioPanel extends HTMLElement {
     const applyActions = this.shadowRoot.querySelector("#scene-apply-actions");
     if (!list) return;
 
-    if (!this._suggestions) {
+    // Un tableau vide est "vrai" en JS (seul null/undefined est "faux") --
+    // sans ce test explicite sur la longueur, une proposition vide aurait
+    // quand meme affiche le bouton Appliquer, qui n'aurait alors rien fait
+    // au clic (garde-fou de longueur dans _applyScene) sans aucune
+    // explication visible pour l'utilisateur.
+    if (!this._suggestions || !this._suggestions.length) {
       list.innerHTML = "";
       if (applyActions) applyActions.style.display = "none";
       return;
@@ -833,24 +847,45 @@ class AlexSceneStudioPanel extends HTMLElement {
   }
 
   async _applyScene() {
-    if (!this._suggestions || !this._suggestions.length) return;
-    await this._hass.callWS({ type: "alex_scene_studio/apply_scene", suggestions: this._suggestions });
+    if (!this._suggestions || !this._suggestions.length) {
+      alert("Aucune proposition à appliquer -- génère d'abord une proposition.");
+      return;
+    }
+    const btn = this.shadowRoot.querySelector("#apply-scene-btn");
+    if (btn) btn.textContent = "Application en cours…";
+    try {
+      const result = await this._hass.callWS({ type: "alex_scene_studio/apply_scene", suggestions: this._suggestions });
+      console.log("Alex Scene Studio - apply_scene résultat :", result);
+    } catch (err) {
+      console.error("Alex Scene Studio - échec de apply_scene :", err);
+      alert(`Échec de l'application : ${(err && err.message) || err}`);
+    } finally {
+      if (btn) btn.textContent = "Appliquer aux lumières";
+    }
   }
 
   async _saveAsHaScene() {
-    if (!this._suggestions || !this._suggestions.length) return;
+    if (!this._suggestions || !this._suggestions.length) {
+      alert("Aucune proposition à enregistrer -- génère d'abord une proposition.");
+      return;
+    }
     const nameInput = this.shadowRoot.querySelector("#ha-scene-name");
     const sceneName = (nameInput.value || this._roomName || "Alex Scene Studio").trim();
-    // La sauvegarde capture les etats ACTUELS des lumieres -- s'assurer
-    // qu'elles refletent bien la proposition avant de creer la scene.
-    await this._applyScene();
-    const result = await this._hass.callWS({
-      type: "alex_scene_studio/save_as_ha_scene",
-      scene_name: sceneName,
-      entity_ids: this._suggestions.map((s) => s.entity_id),
-    });
-    if (result && result.scene_entity_id) {
-      alert(`Scène enregistrée : ${result.scene_entity_id}`);
+    try {
+      // La sauvegarde capture les etats ACTUELS des lumieres -- s'assurer
+      // qu'elles refletent bien la proposition avant de creer la scene.
+      await this._applyScene();
+      const result = await this._hass.callWS({
+        type: "alex_scene_studio/save_as_ha_scene",
+        scene_name: sceneName,
+        entity_ids: this._suggestions.map((s) => s.entity_id),
+      });
+      if (result && result.scene_entity_id) {
+        alert(`Scène enregistrée : ${result.scene_entity_id}`);
+      }
+    } catch (err) {
+      console.error("Alex Scene Studio - échec de save_as_ha_scene :", err);
+      alert(`Échec de l'enregistrement : ${(err && err.message) || err}`);
     }
   }
 
