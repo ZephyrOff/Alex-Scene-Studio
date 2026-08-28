@@ -183,6 +183,20 @@ détaillé sur l'éclairage harmonieux) combine :
   petite ampoule ne reçoivent pas la même consigne pour un rendu
   équivalent : une lumière deux fois plus puissante (réglage à 2.0) reçoit
   automatiquement une luminosité réduite en conséquence.
+- **Variation de luminosité selon la hauteur** — sans ça, plusieurs
+  lumières partageant le même rôle (même montage + direction) avec des
+  réglages d'importance/puissance par défaut recevaient une luminosité
+  strictement identique, quelle que soit leur position réelle. Une lumière
+  plus haute reçoit désormais un peu plus de luminosité brute (±15% selon
+  sa hauteur relative dans la pièce), une lumière basse un peu moins, pour
+  un effet perçu plus naturel.
+- **Le style de génération ne se sabote plus lui-même** — Doux/Normal/
+  Dynamique/Explosif poussent saturation ET luminosité dans la même
+  direction, mais le boost de luminosité est calculé **après** le
+  compromis saturation/luminosité, pas avant : sinon, un style qui pousse
+  fortement la saturation déclenchait sa propre pénalité de luminosité
+  (couleur très saturée = moins lumineuse) et finissait par donner un
+  rendu plus sombre que « Normal » — l'inverse de l'intention.
 
 Les capacités réelles de chaque lumière (RGB, température de couleur
 seule, luminosité seule) sont lues **en direct** au moment du calcul

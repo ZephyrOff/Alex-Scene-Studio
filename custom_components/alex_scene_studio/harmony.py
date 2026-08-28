@@ -349,11 +349,16 @@ def compute_scene(
         resolved_role_mult = role_multiplier or {}
 
     # Le style de generation s'applique EN PLUS de l'ambiance/des parametres
-    # manuels, pas a leur place -- fixe l'intensite chromatique/lumineuse
-    # globale independamment de la teinte/du contraste choisis.
+    # manuels, pas a leur place. La saturation s'applique tout de suite --
+    # mais PAS l'intensite : elle est reportee a la toute fin (apres le
+    # compromis saturation/luminosite), sinon un style qui pousse la
+    # saturation ET l'intensite en meme temps declenche sa PROPRE penalite
+    # de luminosite (saturation elevee -> moins lumineux) qui annule le
+    # boost qu'il etait cense apporter -- "explosif" finissait plus sombre
+    # que "normal", exactement l'inverse de l'intention.
     style = GENERATION_STYLES.get(generation_style, GENERATION_STYLES["normal"])
     resolved_sat *= style["saturation_mult"]
-    resolved_intensity *= style["intensity_mult"]
+    style_intensity_mult = style["intensity_mult"]
 
     direction_sign = rng.choice((1, -1))
     hue_slots = _hue_scheme(resolved_hue, scheme, direction_sign)
@@ -379,6 +384,18 @@ def compute_scene(
             for r, w in role_weights.items()
         )
 
+        # Variation par hauteur (+/-15%) : sans ca, plusieurs lumieres
+        # partageant le meme role (meme montage+direction) et les memes
+        # importance/puissance par defaut recoivent une luminosite
+        # STRICTEMENT identique, quelle que soit leur position reelle --
+        # signale comme un vrai defaut ("il ne faut pas faire cela",
+        # documents fournis). Une lumiere plus haute (plafond) eclaire
+        # generalement une zone plus large depuis plus loin et beneficie
+        # d'un peu plus de luminosite brute ; une lumiere basse, plus proche
+        # de l'observateur, peut rester un peu plus discrete pour un effet
+        # percu equivalent.
+        bri *= 0.85 + 0.3 * normalized_height
+
         importance = max(0.0, min(1.0, light.importance))
         bri *= 0.4 + 0.6 * importance
 
@@ -396,6 +413,13 @@ def compute_scene(
 
         sat = max(0.0, min(100.0, sat))
         bri = _saturation_brightness_tradeoff(sat, bri)
+
+        # Boost de style applique EN DERNIER (voir note plus haut) : garantit
+        # qu'un style plus intense se traduit toujours par un resultat plus
+        # lumineux, jamais annule par la penalite de saturation qu'il
+        # declenche lui-meme plus tot dans le calcul.
+        bri *= style_intensity_mult
+
         bri_int = max(1, min(255, round(bri)))
 
         color_temp_kelvin = None
