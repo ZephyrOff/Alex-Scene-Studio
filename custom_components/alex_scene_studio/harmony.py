@@ -201,13 +201,40 @@ def derive_role(position: str, direction: str) -> str:
     return _ROLE_FROM_POSITION_DIRECTION.get((position, direction), "primary")
 
 
-def _hue_scheme(base_hue: float, scheme: str) -> list[float]:
+GRADIENT_STOPS = 6  # nombre de teintes distinctes dans le degrade -- confirme sur plusieurs vraies scenes Hue (Crepuscule tropical, Rio, Scintillement d'emeraude...), toutes a 6 teintes
+
+# Largeur de l'arc de la roue chromatique balaye par le degrade, selon le
+# schema choisi -- mesuree approximativement sur de vraies scenes Hue
+# (Crepuscule tropical ~135°, Scintillement d'emeraude ~155°, Rio ~120°).
+# Ce sont des palettes soigneusement composees a la main par des coloristes
+# chez Signify -- cette approximation (arc regulier, points egalement
+# espaces) reproduit l'esprit du resultat (un vrai degrade riche, pas 2-3
+# points isoles), pas une replique exacte de leurs choix precis.
+SCHEME_ARC_WIDTH = {
+    "analogous": 90,
+    "complementary": 150,
+    "triadic": 220,
+}
+
+
+def _hue_scheme(base_hue: float, scheme: str, direction: int = 1) -> list[float]:
+    """Genere un degrade de plusieurs teintes (GRADIENT_STOPS, 6 par
+    defaut) egalement reparties sur un arc de la roue chromatique -- pas
+    un petit nombre de points isoles comme avant (complementaire = 2
+    points, triadique = 3 points), qui donnait un rendu bien trop uniforme
+    compare a de vraies scenes Hue une fois compare directement.
+
+    `direction` (1 ou -1) : sens du balayage -- une meme teinte de depart
+    peut donner un degrade vers le "chaud" ou vers le "froid" selon le sens
+    choisi (ex. depuis le bleu, +1 va vers le violet/magenta, -1 va vers le
+    vert/jaune -- confirme necessaire par comparaison avec deux vraies
+    scenes Hue qui partent de teintes proches mais divergent dans des sens
+    opposes)."""
     base_hue = base_hue % 360
-    if scheme == "complementary":
-        return [base_hue, (base_hue + 180) % 360]
-    if scheme == "triadic":
-        return [base_hue, (base_hue + 120) % 360, (base_hue + 240) % 360]
-    return [base_hue, (base_hue + 30) % 360, (base_hue - 30) % 360]
+    width = SCHEME_ARC_WIDTH.get(scheme, 90) * (1 if direction >= 0 else -1)
+    if GRADIENT_STOPS <= 1:
+        return [base_hue]
+    return [(base_hue + width * i / (GRADIENT_STOPS - 1)) % 360 for i in range(GRADIENT_STOPS)]
 
 
 def _lerp_hue(h1: float, h2: float, t: float) -> float:
@@ -306,7 +333,13 @@ def compute_scene(
         resolved_white_temp = white_temperature if white_temperature is not None else 2700.0
         resolved_role_mult = role_multiplier or {}
 
-    hue_slots = _hue_scheme(resolved_hue, scheme)
+    # Sens du degrade tire au hasard a chaque generation, meme principe que
+    # la teinte de base au sein d'une ambiance -- varie les propositions
+    # sans avoir besoin d'un reglage dedie (confirme necessaire par
+    # comparaison avec de vraies scenes Hue divergeant dans les deux sens
+    # depuis des teintes de depart proches).
+    direction = rng.choice((1, -1))
+    hue_slots = _hue_scheme(resolved_hue, scheme, direction)
 
     # Plage de hauteurs de la piece (pour normaliser la position verticale
     # de chaque lumiere entre 0 et 1) -- calculee une seule fois, avant la

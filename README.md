@@ -96,16 +96,24 @@ de conception détaillé sur l'éclairage harmonieux) combine :
   l'amplitude réelle : contraste faible = les trois rôles se rapprochent
   (rendu uniforme, façon quotidien) ; contraste élevé = pleine séparation
   (rendu marqué, façon soirée).
-- **Dégradé de teinte selon la hauteur** — inspiré de **Hue SpatialAware**
-  (fonctionnalité réelle de Philips Hue, lancée début 2026) : plutôt qu'une
-  teinte fixe par rôle (deux lumières « accentuation » recevaient
-  auparavant exactement la même couleur, peu importe leur position réelle),
-  la teinte de chaque lumière est désormais **interpolée en continu** selon
-  sa hauteur relative dans la pièce — reproduisant l'exemple typique d'un
-  coucher de soleil chez Hue : teintes chaudes en bas, froides en haut, en
-  dégradé fluide plutôt que par blocs. Deux lumières du même rôle à des
-  hauteurs différentes reçoivent maintenant des teintes différentes ; deux
-  lumières à la même hauteur reçoivent la même teinte.
+- **Palette riche à 6 teintes, en dégradé continu selon la hauteur** —
+  inspiré de **Hue SpatialAware** (fonctionnalité réelle de Philips Hue,
+  lancée début 2026) et comparé directement à de vraies scènes de la
+  galerie Hue (Crépuscule tropical, Scintillement d'émeraude, Rio...),
+  toutes composées de **6 teintes distinctes** réparties sur un large arc
+  de la roue chromatique — pas 2-3 points isolés comme dans une version
+  antérieure de cet algorithme, qui donnait un rendu bien trop uniforme une
+  fois comparé à ces vraies références. Chaque lumière reçoit une teinte
+  **interpolée en continu** le long de ce dégradé à 6 points selon sa
+  hauteur relative dans la pièce (reproduisant l'exemple typique d'un
+  coucher de soleil chez Hue : teintes chaudes en bas, froides en haut).
+  Le sens du balayage (vers le violet/magenta ou vers le vert/jaune depuis
+  une même teinte de départ) est tiré au hasard à chaque génération, comme
+  la teinte elle-même — deux vraies scènes Hue à teintes de départ proches
+  peuvent diverger dans des sens opposés, un seul sens fixe ne suffisait
+  pas à reproduire cette variété. Deux lumières du même rôle à des hauteurs
+  différentes reçoivent maintenant des teintes réellement différentes ;
+  deux lumières à la même hauteur reçoivent la même teinte.
 - **Reshape par ambiance** — certaines ambiances (Cinéma notamment) vont
   plus loin que le contraste : elles **inversent** carrément la hiérarchie
   habituelle (fonctionnel presque éteint, ambiance dominante — « fonctionnel
@@ -186,12 +194,13 @@ intégration).
   en compte — Hue combine généralement plusieurs axes selon la scène, mais
   un seul axe suffisait à corriger le vrai défaut signalé (toutes les
   lumières d'un même rôle recevaient exactement la même teinte).
-- Cas limite connu : pour le schéma **complémentaire** (les deux teintes
-  sont à exactement 180° l'une de l'autre), l'interpolation à la hauteur
-  médiane exacte choisit arbitrairement l'un des deux chemins possibles sur
-  la roue chromatique (les deux faisant la même longueur) — sans
-  conséquence sur la validité du résultat, juste un choix qui pourrait
-  surprendre si une lumière tombe pile à cette hauteur médiane.
+- La largeur d'arc par schéma (`SCHEME_ARC_WIDTH`) est une **approximation**
+  mesurée à l'œil sur quelques vraies scènes Hue, pas une réplique exacte
+  de leurs choix précis — les palettes Hue sont composées à la main par de
+  vrais coloristes, avec un espacement qui n'est probablement pas
+  parfaitement régulier comme le fait cet algorithme. Reproduit l'esprit du
+  résultat (un vrai dégradé riche à 6 teintes sur un large arc), pas une
+  copie pixel-perfect.
 
 ## À venir (pas encore construit)
 
