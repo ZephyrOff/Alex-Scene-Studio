@@ -114,6 +114,18 @@ function lightPayload(l) {
     direction: l.direction || "direct",
     importance: l.importance != null ? l.importance : 0.7,
     light_type: l.light_type || "color",
+    power: l.power != null ? l.power : 1.0,
+  };
+}
+
+function zonePayload(z) {
+  return {
+    name: z.name,
+    x: z.x,
+    y: z.y,
+    hue: z.hue,
+    saturation: z.saturation != null ? z.saturation : 70,
+    influence_radius: z.influence_radius != null ? z.influence_radius : 150,
   };
 }
 
@@ -134,7 +146,11 @@ class AlexSceneStudioPanel extends HTMLElement {
     this._roomName = "";
     this._points = []; // contour, ferme des que _closed = true
     this._closed = false;
-    this._lights = []; // {entity_id, x, y, mount_type, height, direction, role, importance}
+    this._lights = []; // {entity_id, x, y, mount_type, height, direction, importance, light_type, power}
+    this._zones = []; // {name, x, y, hue, saturation, influence_radius}
+
+    // Mode de placement au clic dans le contour : "light" ou "zone".
+    this._placementMode = "light";
 
     // Selections courantes pour le placement de la prochaine lumiere.
     this._pendingEntity = "";
@@ -143,9 +159,16 @@ class AlexSceneStudioPanel extends HTMLElement {
     this._pendingDirection = "direct";
     this._pendingLightType = "color"; // "color" | "white" -- choix explicite, plus fiable qu'une detection automatique
     this._pendingImportance = 0.7; // 0-1
+    this._pendingPower = 1.0; // puissance/capacite relative -- 1.0 = reference
 
-    // Glisser-depose : point de mur ou lumiere en cours de deplacement.
-    // { kind: "point"|"light", index: N, startX, startY } ou null.
+    // Selections courantes pour le placement de la prochaine zone.
+    this._pendingZoneName = "";
+    this._pendingZoneHue = 30;
+    this._pendingZoneSaturation = 70;
+    this._pendingZoneRadius = 150;
+
+    // Glisser-depose : point de mur, lumiere ou zone en cours de deplacement.
+    // { kind: "point"|"light"|"zone", index: N, startX, startY } ou null.
     this._dragging = null;
 
     // Section Scene (phase 2) : parametres de generation + derniere
@@ -205,12 +228,19 @@ class AlexSceneStudioPanel extends HTMLElement {
     this._points = [];
     this._closed = false;
     this._lights = [];
+    this._zones = [];
+    this._placementMode = "light";
     this._pendingEntity = "";
     this._pendingMountType = "ceiling";
     this._pendingHeight = 2.2;
     this._pendingDirection = "direct";
     this._pendingLightType = "color";
     this._pendingImportance = 0.7;
+    this._pendingPower = 1.0;
+    this._pendingZoneName = "";
+    this._pendingZoneHue = 30;
+    this._pendingZoneSaturation = 70;
+    this._pendingZoneRadius = 150;
     this._dragging = null;
     this._suggestions = null;
     this._previewMode = false;
@@ -221,14 +251,20 @@ class AlexSceneStudioPanel extends HTMLElement {
     this._roomName = room.name;
     this._points = room.points.map((p) => ({ x: p.x, y: p.y }));
     this._closed = this._points.length >= 3;
-    // height/direction/light_type/importance : repli sur des valeurs par
-    // defaut pour les pieces enregistrees avant l'ajout de ces champs.
+    // height/direction/light_type/importance/power : repli sur des valeurs
+    // par defaut pour les pieces enregistrees avant l'ajout de ces champs.
     this._lights = room.lights.map((l) => ({
       height: 2.2,
       direction: "direct",
       light_type: "color",
       importance: 0.7,
+      power: 1.0,
       ...l,
+    }));
+    this._zones = (room.zones || []).map((z) => ({
+      saturation: 70,
+      influence_radius: 150,
+      ...z,
     }));
     // Une proposition generee pour une AUTRE piece n'a plus de sens ici.
     this._suggestions = null;
@@ -236,6 +272,7 @@ class AlexSceneStudioPanel extends HTMLElement {
     this._syncEditorInputs();
     this._renderCanvas();
     this._renderLightsList();
+    this._renderZonesList();
     this._renderScenePreviewList();
     this._renderRoomList();
   }
@@ -354,6 +391,17 @@ class AlexSceneStudioPanel extends HTMLElement {
             </div>
           </div>
 
+          <div class="card" id="placement-mode-card" style="display:none;">
+            <h2>Que place le clic dans le contour ?</h2>
+            <div class="row">
+              <label>Mode</label>
+              <select id="placement-mode-select">
+                <option value="light">Une lumière</option>
+                <option value="zone">Une zone</option>
+              </select>
+            </div>
+          </div>
+
           <div class="card" id="lights-card" style="display:none;">
             <h2>Positionner les lumières</h2>
             <div class="row">
@@ -380,6 +428,10 @@ class AlexSceneStudioPanel extends HTMLElement {
               <input type="range" id="importance-input" min="0" max="1" step="0.1" value="0.7" />
             </div>
             <div class="row">
+              <label>Puissance</label>
+              <input type="range" id="power-input" min="0.1" max="3" step="0.1" value="1.0" />
+            </div>
+            <div class="row">
               <label>Hauteur (m)</label>
               <input type="number" id="height-input" min="0" max="10" step="0.1" value="2.2" />
             </div>
@@ -396,12 +448,38 @@ class AlexSceneStudioPanel extends HTMLElement {
             </div>
             <div class="hint">
               Le <strong>rôle</strong> (principale/accentuation/ambiance) se déduit automatiquement du type
-              de montage et de la direction — pas besoin de le choisir toi-même. Précise si la lumière est
-              en couleur ou blanc uniquement (plus fiable qu'une détection automatique). Choisis tes
-              réglages ci-dessus, puis clique dans le contour pour placer la lumière. Une fois placée,
-              glisse-la directement dans le plan pour la repositionner.
+              de montage et de la direction — pas besoin de le choisir toi-même. La <strong>puissance</strong>
+              (1.0 = référence) réduit automatiquement la consigne d'une lumière plus capable qu'une autre,
+              pour un rendu équivalent. Choisis tes réglages ci-dessus, puis clique dans le contour pour
+              placer la lumière. Une fois placée, glisse-la directement dans le plan pour la repositionner.
             </div>
             <div id="lights-list" style="margin-top:12px;"></div>
+          </div>
+
+          <div class="card" id="zones-card" style="display:none;">
+            <h2>Zones (ancrages chromatiques)</h2>
+            <div class="row">
+              <label>Nom</label>
+              <input type="text" id="zone-name" placeholder="ex. Mur TV, Coin lecture" />
+            </div>
+            <div class="row">
+              <label>Teinte</label>
+              <input type="range" id="zone-hue-input" min="0" max="360" value="30" />
+            </div>
+            <div class="row">
+              <label>Saturation</label>
+              <input type="range" id="zone-sat-input" min="0" max="100" value="70" />
+            </div>
+            <div class="row">
+              <label>Portée</label>
+              <input type="range" id="zone-radius-input" min="20" max="400" value="150" />
+            </div>
+            <div class="hint">
+              Une zone influence les lumières proches vers sa teinte — l'influence décroît avec la distance et
+              s'annule à la portée choisie. Donne un nom à la zone ci-dessus, puis clique dans le contour pour
+              la placer. Une fois placée, glisse-la pour la repositionner.
+            </div>
+            <div id="zones-list" style="margin-top:12px;"></div>
           </div>
 
           <div class="card" id="scene-card" style="display:none;">
@@ -508,10 +586,12 @@ class AlexSceneStudioPanel extends HTMLElement {
       this._points = [];
       this._closed = false;
       this._lights = [];
+      this._zones = [];
       this._suggestions = null;
       this._previewMode = false;
       this._renderCanvas();
       this._renderLightsList();
+      this._renderZonesList();
       this._renderScenePreviewList();
     });
     this.shadowRoot.querySelector("#entity-select").addEventListener("change", (ev) => {
@@ -538,6 +618,10 @@ class AlexSceneStudioPanel extends HTMLElement {
       const v = parseFloat(ev.target.value);
       this._pendingImportance = Number.isFinite(v) ? v : 0.7;
     });
+    this.shadowRoot.querySelector("#power-input").addEventListener("input", (ev) => {
+      const v = parseFloat(ev.target.value);
+      this._pendingPower = Number.isFinite(v) ? v : 1.0;
+    });
     this.shadowRoot.querySelector("#height-input").addEventListener("input", (ev) => {
       const v = parseFloat(ev.target.value);
       this._pendingHeight = Number.isFinite(v) ? v : 2.2;
@@ -545,6 +629,23 @@ class AlexSceneStudioPanel extends HTMLElement {
     this.shadowRoot.querySelector("#direction-select").addEventListener("change", (ev) => {
       this._pendingDirection = ev.target.value;
       this._updateDerivedRolePreview();
+    });
+    this.shadowRoot.querySelector("#placement-mode-select").addEventListener("change", (ev) => {
+      this._placementMode = ev.target.value;
+      this.shadowRoot.querySelector("#lights-card").style.display = this._placementMode === "light" ? "block" : "none";
+      this.shadowRoot.querySelector("#zones-card").style.display = this._placementMode === "zone" ? "block" : "none";
+    });
+    this.shadowRoot.querySelector("#zone-name").addEventListener("input", (ev) => {
+      this._pendingZoneName = ev.target.value;
+    });
+    this.shadowRoot.querySelector("#zone-hue-input").addEventListener("input", (ev) => {
+      this._pendingZoneHue = parseFloat(ev.target.value);
+    });
+    this.shadowRoot.querySelector("#zone-sat-input").addEventListener("input", (ev) => {
+      this._pendingZoneSaturation = parseFloat(ev.target.value);
+    });
+    this.shadowRoot.querySelector("#zone-radius-input").addEventListener("input", (ev) => {
+      this._pendingZoneRadius = parseFloat(ev.target.value);
     });
     this.shadowRoot.querySelector("#save-room-btn").addEventListener("click", () => this._saveRoom());
     this._updateDerivedRolePreview();
@@ -658,9 +759,29 @@ class AlexSceneStudioPanel extends HTMLElement {
       return;
     }
 
-    // Mode placement des lumieres : seulement a l'interieur du contour.
-    if (!this._pendingEntity) return;
+    // Mode placement : lumiere ou zone selon le selecteur, seulement a
+    // l'interieur du contour.
     if (!pointInPolygon(p, this._points)) return;
+
+    if (this._placementMode === "zone") {
+      if (!this._pendingZoneName.trim()) {
+        this.shadowRoot.querySelector("#zone-name").focus();
+        return;
+      }
+      this._zones.push({
+        name: this._pendingZoneName.trim(),
+        x: p.x,
+        y: p.y,
+        hue: this._pendingZoneHue,
+        saturation: this._pendingZoneSaturation,
+        influence_radius: this._pendingZoneRadius,
+      });
+      this._renderCanvas();
+      this._renderZonesList();
+      return;
+    }
+
+    if (!this._pendingEntity) return;
     this._lights.push({
       entity_id: this._pendingEntity,
       x: p.x,
@@ -670,6 +791,7 @@ class AlexSceneStudioPanel extends HTMLElement {
       direction: this._pendingDirection,
       light_type: this._pendingLightType,
       importance: this._pendingImportance,
+      power: this._pendingPower,
     });
     this._renderCanvas();
     this._renderLightsList();
@@ -683,7 +805,7 @@ class AlexSceneStudioPanel extends HTMLElement {
   // -----------------------------------------------------------------------
   _onMarkerPointerDown(ev, kind, index) {
     ev.stopPropagation();
-    const source = kind === "point" ? this._points[index] : this._lights[index];
+    const source = kind === "point" ? this._points[index] : kind === "zone" ? this._zones[index] : this._lights[index];
     this._dragging = { kind, index, startX: source.x, startY: source.y, moved: false };
   }
 
@@ -693,6 +815,9 @@ class AlexSceneStudioPanel extends HTMLElement {
     this._dragging.moved = true;
     if (this._dragging.kind === "point") {
       this._points[this._dragging.index] = { x: snapToGrid(p.x), y: snapToGrid(p.y) };
+    } else if (this._dragging.kind === "zone") {
+      this._zones[this._dragging.index].x = p.x;
+      this._zones[this._dragging.index].y = p.y;
     } else {
       this._lights[this._dragging.index].x = p.x;
       this._lights[this._dragging.index].y = p.y;
@@ -703,33 +828,41 @@ class AlexSceneStudioPanel extends HTMLElement {
   _onCanvasPointerUp() {
     if (!this._dragging) return;
     const { kind, index, startX, startY, moved } = this._dragging;
-    if (kind === "light" && moved) {
-      // Une lumiere deposee hors du contour revient a sa position de depart
-      // plutot que d'accepter une position invalide.
-      const l = this._lights[index];
-      if (!pointInPolygon(l, this._points)) {
-        l.x = startX;
-        l.y = startY;
+    if ((kind === "light" || kind === "zone") && moved) {
+      // Une lumiere ou une zone deposee hors du contour revient a sa
+      // position de depart plutot que d'accepter une position invalide.
+      const item = kind === "zone" ? this._zones[index] : this._lights[index];
+      if (!pointInPolygon(item, this._points)) {
+        item.x = startX;
+        item.y = startY;
       }
     }
     this._justDragged = moved;
     this._dragging = null;
     this._renderCanvas();
-    this._renderLightsList();
+    if (kind === "zone") {
+      this._renderZonesList();
+    } else {
+      this._renderLightsList();
+    }
   }
 
   _renderCanvas() {
     const svg = this.shadowRoot.querySelector("#plan");
     if (!svg) return;
 
+    const placementModeCard = this.shadowRoot.querySelector("#placement-mode-card");
     const lightsCard = this.shadowRoot.querySelector("#lights-card");
+    const zonesCard = this.shadowRoot.querySelector("#zones-card");
     const sceneCard = this.shadowRoot.querySelector("#scene-card");
     const drawHint = this.shadowRoot.querySelector("#draw-hint");
-    if (lightsCard) lightsCard.style.display = this._closed ? "block" : "none";
+    if (placementModeCard) placementModeCard.style.display = this._closed ? "block" : "none";
+    if (lightsCard) lightsCard.style.display = this._closed && this._placementMode === "light" ? "block" : "none";
+    if (zonesCard) zonesCard.style.display = this._closed && this._placementMode === "zone" ? "block" : "none";
     if (sceneCard) sceneCard.style.display = this._closed && this._lights.length ? "block" : "none";
     if (drawHint) {
       drawHint.textContent = this._closed
-        ? "Contour terminé. Glisse un point ou une lumière pour la repositionner ; « Recommencer le contour » pour tout retracer."
+        ? "Contour terminé. Glisse un point, une lumière ou une zone pour la repositionner ; « Recommencer le contour » pour tout retracer."
         : "Clique dans le plan pour placer les coins du contour (accroché à la grille). Clique près du premier point pour refermer.";
     }
 
@@ -747,6 +880,23 @@ class AlexSceneStudioPanel extends HTMLElement {
              fill="${i === 0 ? "#f4a935" : "#03a9f4"}" stroke="white" stroke-width="1.5"
              style="cursor:grab;" />`
       )
+      .join("");
+
+    // Zones : cercle de portee (pointille, semi-transparent) + centre plein
+    // dans la teinte de la zone -- rendu AVANT les lumieres pour qu'elles
+    // restent visibles par-dessus.
+    const zoneMarkers = this._zones
+      .map((z, i) => {
+        const css = hsvToCss(z.hue, z.saturation, 220);
+        return `
+          <g class="zone-marker" data-zone-index="${i}">
+            <circle cx="${z.x}" cy="${z.y}" r="${z.influence_radius}" fill="${css}" fill-opacity="0.08"
+                    stroke="${css}" stroke-opacity="0.5" stroke-width="1.5" stroke-dasharray="6,4" style="pointer-events:none;" />
+            <circle class="zone-center" data-zone-index="${i}" cx="${z.x}" cy="${z.y}" r="8" fill="${css}"
+                    stroke="white" stroke-width="1.5" style="cursor:grab;" />
+            <text x="${z.x}" y="${z.y - 14}" font-size="11" text-anchor="middle" fill="white" style="pointer-events:none;">${escapeHtml(z.name)}</text>
+          </g>`;
+      })
       .join("");
 
     // En mode apercu (une proposition vient d'etre generee), les marqueurs
@@ -786,6 +936,7 @@ class AlexSceneStudioPanel extends HTMLElement {
       <rect x="0" y="0" width="${VIEWBOX_W}" height="${VIEWBOX_H}" fill="url(#grid)" />
       ${shapeEl}
       ${cornerDots}
+      ${zoneMarkers}
       ${lightMarkers}
     `;
 
@@ -797,6 +948,11 @@ class AlexSceneStudioPanel extends HTMLElement {
     svg.querySelectorAll(".light-marker").forEach((el) => {
       el.addEventListener("pointerdown", (ev) =>
         this._onMarkerPointerDown(ev, "light", parseInt(el.getAttribute("data-light-index"), 10))
+      );
+    });
+    svg.querySelectorAll(".zone-center").forEach((el) => {
+      el.addEventListener("pointerdown", (ev) =>
+        this._onMarkerPointerDown(ev, "zone", parseInt(el.getAttribute("data-zone-index"), 10))
       );
     });
   }
@@ -873,6 +1029,35 @@ class AlexSceneStudioPanel extends HTMLElement {
     });
   }
 
+  _renderZonesList() {
+    const list = this.shadowRoot.querySelector("#zones-list");
+    if (!list) return;
+    if (!this._zones.length) {
+      list.innerHTML = `<div class="empty">Aucune zone placée pour l'instant.</div>`;
+      return;
+    }
+    list.innerHTML = this._zones
+      .map((z, i) => {
+        const swatch = hsvToCss(z.hue, z.saturation, 220);
+        return `
+          <div class="light-item" data-index="${i}">
+            <span style="width:14px;height:14px;border-radius:50%;background:${swatch};flex:0 0 14px;"></span>
+            <span style="flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">${escapeHtml(z.name)}</span>
+            <span style="color:var(--secondary-text-color);">portée ${Math.round(z.influence_radius)}</span>
+            <span class="del-btn" data-del-zone-index="${i}">✕</span>
+          </div>`;
+      })
+      .join("");
+    list.querySelectorAll("[data-del-zone-index]").forEach((el) => {
+      el.addEventListener("click", () => {
+        const idx = parseInt(el.getAttribute("data-del-zone-index"), 10);
+        this._zones.splice(idx, 1);
+        this._renderCanvas();
+        this._renderZonesList();
+      });
+    });
+  }
+
   _renderRoomList() {
     const list = this.shadowRoot.querySelector("#room-list");
     if (!list) return;
@@ -924,6 +1109,7 @@ class AlexSceneStudioPanel extends HTMLElement {
     const payload = {
       type: "alex_scene_studio/compute_scene",
       lights: this._lights.map(lightPayload),
+      zones: this._zones.map(zonePayload),
       scheme: this._sceneUseMood ? "analogous" : this._sceneScheme, // ignore cote serveur si mood fourni
     };
     if (this._sceneUseMood) {
@@ -1046,6 +1232,7 @@ class AlexSceneStudioPanel extends HTMLElement {
       name: this._roomName.trim(),
       points: this._points.map((p) => ({ x: p.x, y: p.y })),
       lights: this._lights.map(lightPayload),
+      zones: this._zones.map(zonePayload),
     };
     if (this._editingRoomId) payload.room_id = this._editingRoomId;
 

@@ -41,8 +41,21 @@ class LightPosition:
     mount_type: str  # "ceiling" | "wall" | "desk" -- position physique
     height: float = 2.2  # metres
     direction: str = "direct"  # "direct" | "indirect"
-    role: str = "primary"  # "primary" | "accent" | "ambient" -- role fonctionnel, independant de mount_type
     importance: float = 0.7  # 0-1
+    power: float = 1.0  # puissance/capacite relative (section 9.1 du guide) -- 1.0 = reference
+
+
+@dataclass
+class Zone:
+    """Une zone nommee et positionnee (section 6.4 du guide) -- ancrage
+    chromatique local qui influence les lumieres proches selon la distance."""
+
+    name: str
+    x: float
+    y: float
+    hue: float
+    saturation: float = 70.0
+    influence_radius: float = 150.0
 
 
 @dataclass
@@ -51,6 +64,7 @@ class Room:
     name: str
     points: list[dict]  # [{"x": .., "y": ..}, ...] -- contour polygonal, ordre = trace
     lights: list[dict] = field(default_factory=list)  # liste de LightPosition serialisees
+    zones: list[dict] = field(default_factory=list)  # liste de Zone serialisees
 
 
 POINT_SCHEMA = {vol.Required("x"): vol.Coerce(float), vol.Required("y"): vol.Coerce(float)}
@@ -68,6 +82,19 @@ LIGHT_SCHEMA = {
     # pratique (des lumieres RGB confirmees ne recevaient jamais de
     # couleur). Source de verite unique desormais.
     vol.Optional("light_type", default="color"): vol.In(("color", "white")),
+    # Puissance/capacite relative (section 9.1 du guide) : une bande LED
+    # puissante et une petite ampoule ne devraient pas recevoir la meme
+    # consigne pour un rendu equivalent.
+    vol.Optional("power", default=1.0): vol.All(vol.Coerce(float), vol.Range(min=0.1, max=10)),
+}
+
+ZONE_SCHEMA = {
+    vol.Required("name"): str,
+    vol.Required("x"): vol.Coerce(float),
+    vol.Required("y"): vol.Coerce(float),
+    vol.Required("hue"): vol.Coerce(float),
+    vol.Optional("saturation", default=70.0): vol.Coerce(float),
+    vol.Optional("influence_radius", default=150.0): vol.Coerce(float),
 }
 
 SAVE_ROOM_SCHEMA = {
@@ -76,6 +103,7 @@ SAVE_ROOM_SCHEMA = {
     vol.Required("name"): str,
     vol.Required("points"): [POINT_SCHEMA],
     vol.Optional("lights", default=list): [LIGHT_SCHEMA],
+    vol.Optional("zones", default=list): [ZONE_SCHEMA],
 }
 
 DELETE_ROOM_SCHEMA = {vol.Required("type"): f"{DOMAIN}/delete_room", vol.Required("room_id"): str}
@@ -85,6 +113,7 @@ GET_ROOMS_SCHEMA = {vol.Required("type"): f"{DOMAIN}/get_rooms"}
 COMPUTE_SCENE_SCHEMA = {
     vol.Required("type"): f"{DOMAIN}/compute_scene",
     vol.Required("lights"): [LIGHT_SCHEMA],
+    vol.Optional("zones", default=list): [ZONE_SCHEMA],
     vol.Required("scheme"): vol.In(["complementary", "analogous", "triadic"]),
     vol.Optional("mood"): vol.In(list(harmony.MOOD_PRESETS)),
     vol.Optional("base_hue"): vol.Coerce(float),
@@ -169,7 +198,13 @@ async def websocket_save_room(hass: HomeAssistant, connection, msg) -> None:
     scenes)."""
     rooms = _entry_data(hass)["rooms"]
     room_id = msg.get("room_id") or str(uuid.uuid4())
-    room = Room(id=room_id, name=msg["name"], points=msg["points"], lights=msg.get("lights", []))
+    room = Room(
+        id=room_id,
+        name=msg["name"],
+        points=msg["points"],
+        lights=msg.get("lights", []),
+        zones=msg.get("zones", []),
+    )
     rooms[room_id] = asdict(room)
     await _async_persist(hass)
     connection.send_result(msg["id"], {"room": rooms[room_id]})
@@ -203,14 +238,29 @@ async def websocket_compute_scene(hass: HomeAssistant, connection, msg) -> None:
         light_inputs.append(
             harmony.LightInput(
                 entity_id=l["entity_id"],
+                x=l["x"],
+                y=l["y"],
                 position=l["mount_type"],
                 direction=l.get("direction", "direct"),
                 importance=l.get("importance", 0.7),
                 height=l.get("height", 2.2),
+                power=l.get("power", 1.0),
                 supports_color=is_color,
                 supports_color_temp=not is_color,
             )
         )
+
+    zone_inputs = [
+        harmony.ZoneInput(
+            name=z["name"],
+            x=z["x"],
+            y=z["y"],
+            hue=z["hue"],
+            saturation=z.get("saturation", 70.0),
+            influence_radius=z.get("influence_radius", 150.0),
+        )
+        for z in msg.get("zones", [])
+    ]
 
     try:
         suggestions = harmony.compute_scene(
@@ -222,6 +272,7 @@ async def websocket_compute_scene(hass: HomeAssistant, connection, msg) -> None:
             global_intensity=msg.get("global_intensity"),
             contrast=msg.get("contrast"),
             white_temperature=msg.get("white_temperature"),
+            zones=zone_inputs,
             rng=random.Random(),
         )
     except ValueError as exc:

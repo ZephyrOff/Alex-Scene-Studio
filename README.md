@@ -41,32 +41,41 @@ posé ; « Recommencer le contour » repart de zéro. **Un point déjà posé pe
 
 ### 2. Positionner les lumières
 
-Une fois le contour fermé, choisis une lumière, précise si elle est en
-**couleur (RGB)** ou **blanc uniquement** (choix explicite — plus fiable
-qu'une détection automatique des capacités, qui s'est avérée peu fiable en
-pratique), son **type de montage** (Plafond / Mur / Bureau — sa position
-physique), son **importance** (0-1, son poids au sein de son rôle), sa
-**hauteur** (en mètres) et sa **direction** (Direct / Indirect — une source
-visible vs. une lumière rebondie sur une surface), puis clique à l'intérieur
-du contour pour la placer.
+Une fois le contour fermé, choisis le mode de placement (« Une lumière » ou
+« Une zone », voir section suivante). En mode lumière : choisis une
+lumière, précise si elle est en **couleur (RGB)** ou **blanc uniquement**
+(choix explicite — plus fiable qu'une détection automatique des capacités,
+qui s'est avérée peu fiable en pratique), son **type de montage** (Plafond /
+Mur / Bureau — sa position physique), son **importance** (0-1), sa
+**puissance** relative (1.0 = référence — une lumière plus puissante reçoit
+automatiquement une consigne plus faible pour un rendu équivalent), sa
+**hauteur** (en mètres) et sa **direction** (Direct / Indirect), puis clique
+à l'intérieur du contour pour la placer.
 
-Le **rôle** (Principale / Accentuation / Ambiance — sa fonction dans la
-hiérarchie lumineuse) se **déduit automatiquement** du type de montage et de
-la direction, affiché en lecture seule dans le formulaire et dans la liste
-des lumières placées — pas besoin de le choisir toi-même :
-
-| Montage | Direct | Indirect |
-|---|---|---|
-| Plafond | Principale | Ambiance |
-| Mur | Accentuation | Ambiance |
-| Bureau | Principale | Ambiance |
+Le **rôle** (Principale / Accentuation / Ambiance) se **déduit
+automatiquement** du type de montage et de la direction — mais contrairement
+à une version antérieure, ce n'est plus une catégorie rigide : chaque
+combinaison donne un **mélange pondéré** de rôles (ex. mur + indirect =
+85% ambiance / 15% accent), pas une seule case cochée. Le rôle affiché dans
+le formulaire est celui qui domine ce mélange, à titre indicatif.
 
 **Une lumière déjà placée peut être glissée** directement dans le plan pour
 la repositionner — si elle est déposée hors du contour, elle revient
 automatiquement à sa position précédente. Tous ces réglages restent
 modifiables après coup, directement dans la liste des lumières placées.
 
-### 3. Générer une scène harmonieuse
+### 3. Positionner des zones (ancrages chromatiques)
+
+En mode zone : donne un nom (ex. « Mur TV », « Coin lecture »), une teinte,
+une saturation, et une **portée** (rayon d'influence), puis clique dans le
+contour pour la placer. Une zone tire la teinte des lumières **proches**
+vers la sienne — l'influence décroît linéairement avec la distance et
+s'annule à la portée choisie. Permet des scènes avec plusieurs ambiances
+chromatiques simultanées dans une même pièce (ex. bleu près de la TV, chaud
+dans le coin lecture), pas seulement un unique dégradé du sol au plafond.
+Une zone déjà placée peut aussi être glissée pour la repositionner.
+
+### 4. Générer une scène harmonieuse
 
 Une fois au moins une lumière placée, la section « Scène harmonieuse »
 apparaît. Deux modes :
@@ -136,12 +145,29 @@ de conception détaillé sur l'éclairage harmonieux) combine :
   à toute la scène**, plutôt qu'une conversion indépendante par lumière qui
   produirait des écarts incohérents entre lumières blanches d'une même
   pièce.
+- **Zones à influence par distance** — reconstruit à partir d'un guide de
+  référence sur les moteurs de lumière spatiale. Chaque zone tire la teinte
+  des lumières proches vers la sienne, avec un poids qui décroît
+  linéairement jusqu'à sa portée (au-delà, aucune influence). Une lumière
+  peut être influencée par zéro, une, ou plusieurs zones simultanément.
+- **Mélange en espace de couleur perceptuel (OKLCH)** — quand plusieurs
+  contributions chromatiques se combinent (le dégradé de base + une ou
+  plusieurs zones proches), le mélange se fait en OKLCH plutôt qu'en simple
+  moyenne RGB/HSV, qui produirait des couleurs « sales » (grisâtres/brunes)
+  dès que plusieurs teintes différentes se rencontrent. La teinte finale
+  utilise en plus une **moyenne circulaire** (pas linéaire) pour éviter
+  qu'un mélange proche de la limite 350°/10° ne donne à tort une moyenne
+  autour de 180°.
+- **Puissance relative des luminaires** — une bande LED puissante et une
+  petite ampoule ne reçoivent pas la même consigne pour un rendu
+  équivalent : une lumière deux fois plus puissante (réglage à 2.0) reçoit
+  automatiquement une luminosité réduite en conséquence.
 
 Les capacités réelles de chaque lumière (RGB, température de couleur
 seule, luminosité seule) sont lues **en direct** au moment du calcul
 (`supported_color_modes`), jamais mises en cache.
 
-### 4. Appliquer ou enregistrer
+### 5. Appliquer ou enregistrer
 
 - **Appliquer aux lumières** — envoie les valeurs de la proposition (telle
   quelle) aux vraies lumières.
@@ -153,9 +179,10 @@ seule, luminosité seule) sont lues **en direct** au moment du calcul
 ## Stockage
 
 Fichier JSON dans `.storage/` (mécanisme `Store` natif de Home Assistant) —
-une bibliothèque de pièces, chacune avec son contour (liste de points) et ses
-lumières positionnées (entity_id, position, rôle, importance, hauteur,
-direction). Les scènes générées ne sont **pas** stockées ici — seulement au
+une bibliothèque de pièces, chacune avec son contour (liste de points), ses
+lumières positionnées (entity_id, position, importance, puissance, hauteur,
+direction, couleur/blanc), et ses zones (nom, position, teinte, saturation,
+portée). Les scènes générées ne sont **pas** stockées ici — seulement au
 moment où tu choisis explicitement de les enregistrer en tant que vraie
 scène HA (stockage natif HA pour les scènes, pas un stockage propre à cette
 intégration).
@@ -187,13 +214,11 @@ intégration).
   quoi que ce soit.
 - L'algorithme d'harmonie (`harmony.py`) est volontairement indépendant de
   Home Assistant (aucun import `hass`) — testable et relisible isolément.
-- Le dégradé de teinte utilise la **hauteur** comme seul axe spatial pour
-  cette version (reproduit l'exemple « coucher de soleil » de Hue
-  SpatialAware, un dégradé vertical). Une position horizontale (par exemple
-  « chaud d'un côté de la pièce, froid de l'autre ») n'est pas encore prise
-  en compte — Hue combine généralement plusieurs axes selon la scène, mais
-  un seul axe suffisait à corriger le vrai défaut signalé (toutes les
-  lumières d'un même rôle recevaient exactement la même teinte).
+- Le dégradé de base utilise la **hauteur** comme axe spatial (reproduit
+  l'exemple « coucher de soleil » de Hue SpatialAware) ; les **zones**
+  ajoutent une influence supplémentaire par distance réelle (x/y dans le
+  plan), permettant plusieurs ambiances chromatiques dans une même pièce —
+  ce que l'axe vertical seul ne permettait pas.
 - La largeur d'arc par schéma (`SCHEME_ARC_WIDTH`) est une **approximation**
   mesurée à l'œil sur quelques vraies scènes Hue, pas une réplique exacte
   de leurs choix précis — les palettes Hue sont composées à la main par de
@@ -201,16 +226,28 @@ intégration).
   parfaitement régulier comme le fait cet algorithme. Reproduit l'esprit du
   résultat (un vrai dégradé riche à 6 teintes sur un large arc), pas une
   copie pixel-perfect.
+- La conversion OKLCH utilise les formules publiées par Björn Ottosson
+  (2020) — testées avec un aller-retour exact (sans perte) sur les couleurs
+  de référence (rouge, vert, bleu, blanc...).
+- Le falloff d'influence des zones est **linéaire** (1 à distance nulle, 0
+  à la portée choisie) — le guide de référence utilisé pour cette version
+  propose aussi des variantes quadratique/exponentielle/à puissance
+  réglable pour des formes de dégradé différentes, non retenues pour cette
+  première implémentation par souci de simplicité.
 
 ## À venir (pas encore construit)
 
 - Ajustement individuel de chaque lumière dans l'aperçu (actuellement, la
   proposition s'applique telle quelle — pas encore de curseurs pour
   corriger une lumière précise avant validation).
-- Un axe spatial horizontal en plus de la hauteur (position x/y dans la
-  pièce), pour des scènes du type « chaud d'un côté, froid de l'autre »
-  combinées au dégradé vertical déjà en place.
-- Prise en compte de la surface éclairée (couleur/texture du mur, section 6
-  du document de conception) dans le calcul.
-- Variation automatique selon l'heure/la lumière naturelle (section 17 du
-  document de conception).
+- Orientation/angle de faisceau pour les spots (nécessiterait de capturer
+  une direction vectorielle, pas juste une position) — explicitement classé
+  comme avancé dans le guide de référence utilisé pour cette version.
+- Prise en compte de la surface éclairée (couleur/texture du mur) dans le
+  calcul.
+- Lissage par graphe de voisinage (éviter que deux lumières très proches
+  reçoivent des teintes trop opposées, sauf si la scène le demande),
+  métriques de score d'harmonie, variation automatique selon l'heure/la
+  lumière naturelle, calibration par appareil réel — toutes explicitement
+  classées comme des extensions à ajouter après validation du noyau, pas
+  avant, dans le guide de référence utilisé pour cette version.
