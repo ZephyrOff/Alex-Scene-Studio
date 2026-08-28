@@ -14,6 +14,12 @@ PANEL_ICON = "mdi:floor-plan"
 # plafond = eclairage general, mur = accent, bureau = tache.
 MOUNT_TYPES = ("ceiling", "wall", "desk")
 
+# Role fonctionnel d'une lumiere (independant de sa position physique) --
+# section 19 du document de conception : une lumiere murale peut porter un
+# accent ou une ambiance selon l'intention, pas automatiquement l'un ou
+# l'autre juste parce qu'elle est au mur.
+ROLES = ("primary", "accent", "ambient")
+
 # Direct = source visible eclairant la piece ; indirect = lumiere rebondie
 # sur une surface (corniche, uplighter...) -- influencera plus tard
 # l'algorithme d'harmonie (contribution differente a la couleur/l'ambiance

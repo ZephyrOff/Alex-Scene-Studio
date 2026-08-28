@@ -29,7 +29,7 @@ from homeassistant.core import HomeAssistant
 from homeassistant.helpers.storage import Store
 
 from . import harmony
-from .const import DOMAIN, DIRECTION_TYPES, MOUNT_TYPES, PANEL_ICON, PANEL_TITLE, PANEL_URL_PATH, STORAGE_KEY, STORAGE_VERSION
+from .const import DOMAIN, DIRECTION_TYPES, MOUNT_TYPES, PANEL_ICON, PANEL_TITLE, PANEL_URL_PATH, ROLES, STORAGE_KEY, STORAGE_VERSION
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -43,9 +43,11 @@ class LightPosition:
     entity_id: str
     x: float
     y: float
-    mount_type: str  # "ceiling" | "wall" | "desk"
+    mount_type: str  # "ceiling" | "wall" | "desk" -- position physique
     height: float = 2.2  # metres
     direction: str = "direct"  # "direct" | "indirect"
+    role: str = "primary"  # "primary" | "accent" | "ambient" -- role fonctionnel, independant de mount_type
+    importance: float = 0.7  # 0-1
 
 
 @dataclass
@@ -65,6 +67,8 @@ LIGHT_SCHEMA = {
     vol.Required("mount_type"): vol.In(MOUNT_TYPES),
     vol.Optional("height", default=2.2): vol.Coerce(float),
     vol.Optional("direction", default="direct"): vol.In(DIRECTION_TYPES),
+    vol.Optional("role", default="primary"): vol.In(ROLES),
+    vol.Optional("importance", default=0.7): vol.All(vol.Coerce(float), vol.Range(min=0, max=1)),
 }
 
 SAVE_ROOM_SCHEMA = {
@@ -86,7 +90,9 @@ COMPUTE_SCENE_SCHEMA = {
     vol.Optional("mood"): vol.In(list(harmony.MOOD_PRESETS)),
     vol.Optional("base_hue"): vol.Coerce(float),
     vol.Optional("saturation"): vol.Coerce(float),
-    vol.Optional("brightness"): vol.Coerce(float),
+    vol.Optional("global_intensity"): vol.Coerce(float),
+    vol.Optional("contrast"): vol.All(vol.Coerce(float), vol.Range(min=0, max=1)),
+    vol.Optional("white_temperature"): vol.Coerce(float),
 }
 
 SUGGESTION_SCHEMA = {
@@ -205,8 +211,10 @@ async def websocket_compute_scene(hass: HomeAssistant, connection, msg) -> None:
         light_inputs.append(
             harmony.LightInput(
                 entity_id=l["entity_id"],
-                mount_type=l["mount_type"],
+                role=l.get("role", "primary"),
+                position=l["mount_type"],
                 direction=l.get("direction", "direct"),
+                importance=l.get("importance", 0.7),
                 supports_color=supports_color,
                 supports_color_temp=supports_color_temp,
             )
@@ -219,7 +227,9 @@ async def websocket_compute_scene(hass: HomeAssistant, connection, msg) -> None:
             mood=msg.get("mood"),
             base_hue=msg.get("base_hue"),
             saturation=msg.get("saturation"),
-            brightness=msg.get("brightness"),
+            global_intensity=msg.get("global_intensity"),
+            contrast=msg.get("contrast"),
+            white_temperature=msg.get("white_temperature"),
             rng=random.Random(),
         )
     except ValueError as exc:

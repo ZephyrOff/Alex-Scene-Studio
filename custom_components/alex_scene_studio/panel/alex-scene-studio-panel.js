@@ -82,6 +82,7 @@ function snapToGrid(v) {
 }
 
 const MOUNT_TYPE_LABELS = { ceiling: "Plafond", wall: "Mur", desk: "Bureau" };
+const ROLE_LABELS = { primary: "Principale", accent: "Accentuation", ambient: "Ambiance" };
 const MOUNT_TYPE_ICONS = { ceiling: "\u2B24", wall: "\u25A0", desk: "\u25B2" }; // cercle / carre / triangle plein, distinction visuelle rapide sans dependre d'icones externes
 
 class AlexSceneStudioPanel extends HTMLElement {
@@ -99,13 +100,15 @@ class AlexSceneStudioPanel extends HTMLElement {
     this._roomName = "";
     this._points = []; // contour, ferme des que _closed = true
     this._closed = false;
-    this._lights = []; // {entity_id, x, y, mount_type, height, direction}
+    this._lights = []; // {entity_id, x, y, mount_type, height, direction, role, importance}
 
     // Selections courantes pour le placement de la prochaine lumiere.
     this._pendingEntity = "";
     this._pendingMountType = "ceiling";
     this._pendingHeight = 2.2; // metres, valeur de depart raisonnable (hauteur sous plafond courante)
     this._pendingDirection = "direct";
+    this._pendingRole = "primary"; // "primary" | "accent" | "ambient" -- role fonctionnel, independant de mount_type
+    this._pendingImportance = 0.7; // 0-1
 
     // Glisser-depose : point de mur ou lumiere en cours de deplacement.
     // { kind: "point"|"light", index: N, startX, startY } ou null.
@@ -119,7 +122,9 @@ class AlexSceneStudioPanel extends HTMLElement {
     this._sceneScheme = "analogous";
     this._sceneManualHue = 200;
     this._sceneManualSat = 60;
-    this._sceneManualBri = 180;
+    this._sceneManualIntensity = 1.0;
+    this._sceneManualContrast = 0.6;
+    this._sceneManualWhiteTemp = 2700;
     this._suggestions = null; // liste de {entity_id, hue, saturation, brightness, color_temp_kelvin} ou null
     this._previewMode = false;
   }
@@ -170,6 +175,8 @@ class AlexSceneStudioPanel extends HTMLElement {
     this._pendingMountType = "ceiling";
     this._pendingHeight = 2.2;
     this._pendingDirection = "direct";
+    this._pendingRole = "primary";
+    this._pendingImportance = 0.7;
     this._dragging = null;
     this._suggestions = null;
     this._previewMode = false;
@@ -180,11 +187,13 @@ class AlexSceneStudioPanel extends HTMLElement {
     this._roomName = room.name;
     this._points = room.points.map((p) => ({ x: p.x, y: p.y }));
     this._closed = this._points.length >= 3;
-    // height/direction : repli sur des valeurs par defaut pour les pieces
-    // enregistrees avant l'ajout de ces deux champs.
+    // height/direction/role/importance : repli sur des valeurs par defaut
+    // pour les pieces enregistrees avant l'ajout de ces champs.
     this._lights = room.lights.map((l) => ({
       height: 2.2,
       direction: "direct",
+      role: "primary",
+      importance: 0.7,
       ...l,
     }));
     // Une proposition generee pour une AUTRE piece n'a plus de sens ici.
@@ -326,6 +335,18 @@ class AlexSceneStudioPanel extends HTMLElement {
               </select>
             </div>
             <div class="row">
+              <label>Rôle</label>
+              <select id="role-select">
+                <option value="primary">Principale</option>
+                <option value="accent">Accentuation</option>
+                <option value="ambient">Ambiance</option>
+              </select>
+            </div>
+            <div class="row">
+              <label>Importance</label>
+              <input type="range" id="importance-input" min="0" max="1" step="0.1" value="0.7" />
+            </div>
+            <div class="row">
               <label>Hauteur (m)</label>
               <input type="number" id="height-input" min="0" max="10" step="0.1" value="2.2" />
             </div>
@@ -337,8 +358,10 @@ class AlexSceneStudioPanel extends HTMLElement {
               </select>
             </div>
             <div class="hint">
-              Choisis la lumière et ses réglages ci-dessus, puis clique dans le contour pour la placer.
-              Une fois placée, glisse-la directement dans le plan pour la repositionner.
+              Le <strong>rôle</strong> (principale/accentuation/ambiance) détermine sa fonction dans la
+              hiérarchie lumineuse — indépendant du type de montage : un mur peut porter un accent ou une
+              ambiance selon l'intention. Choisis tes réglages ci-dessus, puis clique dans le contour pour
+              placer la lumière. Une fois placée, glisse-la directement dans le plan pour la repositionner.
             </div>
             <div id="lights-list" style="margin-top:12px;"></div>
           </div>
@@ -373,8 +396,16 @@ class AlexSceneStudioPanel extends HTMLElement {
                 <input type="range" id="scene-sat-input" min="0" max="100" value="60" />
               </div>
               <div class="row">
-                <label>Luminosité</label>
-                <input type="range" id="scene-bri-input" min="1" max="255" value="180" />
+                <label>Intensité globale</label>
+                <input type="range" id="scene-intensity-input" min="0.4" max="1.3" step="0.05" value="1.0" />
+              </div>
+              <div class="row">
+                <label>Contraste</label>
+                <input type="range" id="scene-contrast-input" min="0" max="1" step="0.05" value="0.6" />
+              </div>
+              <div class="row">
+                <label>Temp. de blanc (K)</label>
+                <input type="range" id="scene-white-temp-input" min="2000" max="6500" step="50" value="2700" />
               </div>
               <div class="row">
                 <label>Schéma</label>
@@ -383,6 +414,12 @@ class AlexSceneStudioPanel extends HTMLElement {
                   <option value="complementary">Complémentaire</option>
                   <option value="triadic">Triadique</option>
                 </select>
+              </div>
+              <div class="hint">
+                Le contraste contrôle l'amplitude de la hiérarchie entre principale/accentuation/ambiance
+                (faible = rendu uniforme façon quotidien, élevé = rendu marqué façon soirée). La température
+                de blanc sert de base commune pour toutes les lumières sans RGB — chacune s'en écarte
+                légèrement selon son rôle, pour rester une famille cohérente plutôt que des écarts abrupts.
               </div>
             </div>
             <div class="actions" style="margin-top:6px;">
@@ -441,6 +478,13 @@ class AlexSceneStudioPanel extends HTMLElement {
     this.shadowRoot.querySelector("#mount-select").addEventListener("change", (ev) => {
       this._pendingMountType = ev.target.value;
     });
+    this.shadowRoot.querySelector("#role-select").addEventListener("change", (ev) => {
+      this._pendingRole = ev.target.value;
+    });
+    this.shadowRoot.querySelector("#importance-input").addEventListener("input", (ev) => {
+      const v = parseFloat(ev.target.value);
+      this._pendingImportance = Number.isFinite(v) ? v : 0.7;
+    });
     this.shadowRoot.querySelector("#height-input").addEventListener("input", (ev) => {
       const v = parseFloat(ev.target.value);
       this._pendingHeight = Number.isFinite(v) ? v : 2.2;
@@ -464,8 +508,14 @@ class AlexSceneStudioPanel extends HTMLElement {
     this.shadowRoot.querySelector("#scene-sat-input").addEventListener("input", (ev) => {
       this._sceneManualSat = parseFloat(ev.target.value);
     });
-    this.shadowRoot.querySelector("#scene-bri-input").addEventListener("input", (ev) => {
-      this._sceneManualBri = parseFloat(ev.target.value);
+    this.shadowRoot.querySelector("#scene-intensity-input").addEventListener("input", (ev) => {
+      this._sceneManualIntensity = parseFloat(ev.target.value);
+    });
+    this.shadowRoot.querySelector("#scene-contrast-input").addEventListener("input", (ev) => {
+      this._sceneManualContrast = parseFloat(ev.target.value);
+    });
+    this.shadowRoot.querySelector("#scene-white-temp-input").addEventListener("input", (ev) => {
+      this._sceneManualWhiteTemp = parseFloat(ev.target.value);
     });
     this.shadowRoot.querySelector("#scene-scheme-select").addEventListener("change", (ev) => {
       this._sceneScheme = ev.target.value;
@@ -552,6 +602,8 @@ class AlexSceneStudioPanel extends HTMLElement {
       mount_type: this._pendingMountType,
       height: this._pendingHeight,
       direction: this._pendingDirection,
+      role: this._pendingRole,
+      importance: this._pendingImportance,
     });
     this._renderCanvas();
     this._renderLightsList();
@@ -694,11 +746,20 @@ class AlexSceneStudioPanel extends HTMLElement {
       .map((l, i) => {
         const st = this._hass.states[l.entity_id];
         const name = (st && st.attributes && st.attributes.friendly_name) || l.entity_id;
+        const role = l.role || "primary";
+        const importance = l.importance != null ? l.importance : 0.7;
         return `
-          <div class="light-item" data-index="${i}">
+          <div class="light-item" data-index="${i}" style="flex-wrap:wrap;">
             <span>${MOUNT_TYPE_ICONS[l.mount_type] || ""}</span>
             <span style="flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">${escapeHtml(name)}</span>
             <span style="color:var(--secondary-text-color);">(${MOUNT_TYPE_LABELS[l.mount_type] || l.mount_type})</span>
+            <select class="light-role" data-index="${i}" style="flex:0 0 110px;" title="Rôle">
+              <option value="primary" ${role === "primary" ? "selected" : ""}>Principale</option>
+              <option value="accent" ${role === "accent" ? "selected" : ""}>Accentuation</option>
+              <option value="ambient" ${role === "ambient" ? "selected" : ""}>Ambiance</option>
+            </select>
+            <input type="range" class="light-importance" data-index="${i}" min="0" max="1" step="0.1"
+                   value="${importance}" style="width:70px;flex:0 0 70px;" title="Importance (${importance})" />
             <input type="number" class="light-height" data-index="${i}" min="0" max="10" step="0.1"
                    value="${l.height != null ? l.height : 2.2}" style="width:56px;flex:0 0 56px;" title="Hauteur (m)" />
             <select class="light-direction" data-index="${i}" style="flex:0 0 90px;" title="Direction">
@@ -709,6 +770,20 @@ class AlexSceneStudioPanel extends HTMLElement {
           </div>`;
       })
       .join("");
+    list.querySelectorAll(".light-role").forEach((el) => {
+      el.addEventListener("change", (ev) => {
+        const idx = parseInt(el.getAttribute("data-index"), 10);
+        this._lights[idx].role = ev.target.value;
+      });
+    });
+    list.querySelectorAll(".light-importance").forEach((el) => {
+      el.addEventListener("input", (ev) => {
+        const idx = parseInt(el.getAttribute("data-index"), 10);
+        const v = parseFloat(ev.target.value);
+        this._lights[idx].importance = Number.isFinite(v) ? v : 0.7;
+        el.title = `Importance (${this._lights[idx].importance})`;
+      });
+    });
     list.querySelectorAll(".light-height").forEach((el) => {
       el.addEventListener("input", (ev) => {
         const idx = parseInt(el.getAttribute("data-index"), 10);
@@ -790,7 +865,9 @@ class AlexSceneStudioPanel extends HTMLElement {
     } else {
       payload.base_hue = this._sceneManualHue;
       payload.saturation = this._sceneManualSat;
-      payload.brightness = this._sceneManualBri;
+      payload.global_intensity = this._sceneManualIntensity;
+      payload.contrast = this._sceneManualContrast;
+      payload.white_temperature = this._sceneManualWhiteTemp;
     }
 
     try {
