@@ -98,6 +98,25 @@ const ROLE_FROM_POSITION_DIRECTION = {
 function deriveRole(position, direction) {
   return ROLE_FROM_POSITION_DIRECTION[`${position}|${direction}`] || "primary";
 }
+
+// Construit explicitement le payload d'une lumiere avec UNIQUEMENT les
+// champs attendus par le schema serveur -- jamais un simple `{ ...l }`, qui
+// laisserait passer n'importe quel champ perime (ex. l'ancien "role",
+// retire du schema mais encore present dans des pieces enregistrees avant
+// cette mise a jour) et ferait echouer la validation cote serveur.
+function lightPayload(l) {
+  return {
+    entity_id: l.entity_id,
+    x: l.x,
+    y: l.y,
+    mount_type: l.mount_type,
+    height: l.height != null ? l.height : 2.2,
+    direction: l.direction || "direct",
+    importance: l.importance != null ? l.importance : 0.7,
+    light_type: l.light_type || "color",
+  };
+}
+
 const MOUNT_TYPE_ICONS = { ceiling: "\u2B24", wall: "\u25A0", desk: "\u25B2" }; // cercle / carre / triangle plein, distinction visuelle rapide sans dependre d'icones externes
 
 class AlexSceneStudioPanel extends HTMLElement {
@@ -904,7 +923,7 @@ class AlexSceneStudioPanel extends HTMLElement {
   async _generateScene() {
     const payload = {
       type: "alex_scene_studio/compute_scene",
-      lights: this._lights.map((l) => ({ ...l })),
+      lights: this._lights.map(lightPayload),
       scheme: this._sceneUseMood ? "analogous" : this._sceneScheme, // ignore cote serveur si mood fourni
     };
     if (this._sceneUseMood) {
@@ -1026,7 +1045,7 @@ class AlexSceneStudioPanel extends HTMLElement {
       type: "alex_scene_studio/save_room",
       name: this._roomName.trim(),
       points: this._points.map((p) => ({ x: p.x, y: p.y })),
-      lights: this._lights.map((l) => ({ ...l })),
+      lights: this._lights.map(lightPayload),
     };
     if (this._editingRoomId) payload.room_id = this._editingRoomId;
 
