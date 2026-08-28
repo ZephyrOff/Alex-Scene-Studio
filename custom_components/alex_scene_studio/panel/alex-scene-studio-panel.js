@@ -37,6 +37,41 @@ function distance(a, b) {
   return Math.hypot(a.x - b.x, a.y - b.y);
 }
 
+// Conversion HSV -> CSS (hue 0-360, saturation 0-100, brightness HA 0-255)
+// pour afficher un apercu visuel fidele des propositions -- la luminosite
+// HA (0-255) devient la "valeur" HSV (0-1).
+function hsvToCss(hue, saturation, brightness) {
+  const h = hue / 360;
+  const s = saturation / 100;
+  const v = brightness / 255;
+  const i = Math.floor(h * 6);
+  const f = h * 6 - i;
+  const p = v * (1 - s);
+  const q = v * (1 - f * s);
+  const t = v * (1 - (1 - f) * s);
+  let r, g, b;
+  switch (i % 6) {
+    case 0: r = v; g = t; b = p; break;
+    case 1: r = q; g = v; b = p; break;
+    case 2: r = p; g = v; b = t; break;
+    case 3: r = p; g = q; b = v; break;
+    case 4: r = t; g = p; b = v; break;
+    default: r = v; g = p; b = q; break;
+  }
+  const toHex = (c) => Math.round(c * 255).toString(16).padStart(2, "0");
+  return `#${toHex(r)}${toHex(g)}${toHex(b)}`;
+}
+
+// Approximation Kelvin -> CSS pour l'apercu des lumieres sans RGB (juste
+// color_temp) -- pas une conversion colorimetrique precise, juste de quoi
+// distinguer visuellement chaud/neutre/froid dans l'apercu.
+function kelvinToCss(kelvin) {
+  if (kelvin <= 3000) return "#ffb46b";
+  if (kelvin <= 4500) return "#ffd9a8";
+  if (kelvin <= 5500) return "#fff2e0";
+  return "#cfe4ff";
+}
+
 const CLOSE_THRESHOLD = 15; // unites SVG, distance sous laquelle un clic pres du premier point ferme le contour
 const VIEWBOX_W = 800;
 const VIEWBOX_H = 500;
@@ -75,6 +110,18 @@ class AlexSceneStudioPanel extends HTMLElement {
     // Glisser-depose : point de mur ou lumiere en cours de deplacement.
     // { kind: "point"|"light", index: N, startX, startY } ou null.
     this._dragging = null;
+
+    // Section Scene (phase 2) : parametres de generation + derniere
+    // proposition calculee (jamais appliquee tant que l'utilisateur n'a pas
+    // clique sur Appliquer).
+    this._sceneUseMood = true;
+    this._sceneMood = "energique";
+    this._sceneScheme = "analogous";
+    this._sceneManualHue = 200;
+    this._sceneManualSat = 60;
+    this._sceneManualBri = 180;
+    this._suggestions = null; // liste de {entity_id, hue, saturation, brightness, color_temp_kelvin} ou null
+    this._previewMode = false;
   }
 
   set hass(hass) {
@@ -124,6 +171,8 @@ class AlexSceneStudioPanel extends HTMLElement {
     this._pendingHeight = 2.2;
     this._pendingDirection = "direct";
     this._dragging = null;
+    this._suggestions = null;
+    this._previewMode = false;
   }
 
   _loadRoomIntoEditor(room) {
@@ -138,9 +187,13 @@ class AlexSceneStudioPanel extends HTMLElement {
       direction: "direct",
       ...l,
     }));
+    // Une proposition generee pour une AUTRE piece n'a plus de sens ici.
+    this._suggestions = null;
+    this._previewMode = false;
     this._syncEditorInputs();
     this._renderCanvas();
     this._renderLightsList();
+    this._renderScenePreviewList();
     this._renderRoomList();
   }
 
@@ -290,6 +343,63 @@ class AlexSceneStudioPanel extends HTMLElement {
             <div id="lights-list" style="margin-top:12px;"></div>
           </div>
 
+          <div class="card" id="scene-card" style="display:none;">
+            <h2>Scène harmonieuse</h2>
+            <div class="row">
+              <label>Mode</label>
+              <select id="scene-mode-select">
+                <option value="mood">Ambiance prédéfinie</option>
+                <option value="manual">Teinte libre</option>
+              </select>
+            </div>
+            <div id="scene-mood-fields">
+              <div class="row">
+                <label>Ambiance</label>
+                <select id="scene-mood-select">
+                  <option value="energique">Énergique</option>
+                  <option value="detente">Détente</option>
+                  <option value="concentration">Concentration</option>
+                  <option value="lecture">Lecture</option>
+                </select>
+              </div>
+            </div>
+            <div id="scene-manual-fields" style="display:none;">
+              <div class="row">
+                <label>Teinte de base</label>
+                <input type="range" id="scene-hue-input" min="0" max="360" value="200" />
+              </div>
+              <div class="row">
+                <label>Saturation</label>
+                <input type="range" id="scene-sat-input" min="0" max="100" value="60" />
+              </div>
+              <div class="row">
+                <label>Luminosité</label>
+                <input type="range" id="scene-bri-input" min="1" max="255" value="180" />
+              </div>
+              <div class="row">
+                <label>Schéma</label>
+                <select id="scene-scheme-select">
+                  <option value="analogous">Analogue</option>
+                  <option value="complementary">Complémentaire</option>
+                  <option value="triadic">Triadique</option>
+                </select>
+              </div>
+            </div>
+            <div class="actions" style="margin-top:6px;">
+              <button class="btn btn-outline" id="generate-scene-btn">Générer une proposition</button>
+            </div>
+            <div id="scene-preview-list" style="margin-top:12px;"></div>
+            <div class="actions" id="scene-apply-actions" style="display:none;margin-top:10px;">
+              <button class="btn btn-primary" id="apply-scene-btn">Appliquer aux lumières</button>
+              <input type="text" id="ha-scene-name" placeholder="Nom de la scène HA (optionnel)" style="flex:1;min-width:160px;" />
+              <button class="btn btn-outline" id="save-ha-scene-btn">Enregistrer comme scène HA</button>
+            </div>
+            <div class="hint">
+              L'aperçu colore les lumières directement dans le plan ci-dessus, sans rien envoyer à aucun appareil.
+              Rien n'est allumé/modifié avant que tu cliques sur « Appliquer ».
+            </div>
+          </div>
+
           <div class="actions">
             <button class="btn btn-primary" id="save-room-btn">Enregistrer la pièce</button>
           </div>
@@ -319,8 +429,11 @@ class AlexSceneStudioPanel extends HTMLElement {
       this._points = [];
       this._closed = false;
       this._lights = [];
+      this._suggestions = null;
+      this._previewMode = false;
       this._renderCanvas();
       this._renderLightsList();
+      this._renderScenePreviewList();
     });
     this.shadowRoot.querySelector("#entity-select").addEventListener("change", (ev) => {
       this._pendingEntity = ev.target.value;
@@ -336,6 +449,30 @@ class AlexSceneStudioPanel extends HTMLElement {
       this._pendingDirection = ev.target.value;
     });
     this.shadowRoot.querySelector("#save-room-btn").addEventListener("click", () => this._saveRoom());
+
+    this.shadowRoot.querySelector("#scene-mode-select").addEventListener("change", (ev) => {
+      this._sceneUseMood = ev.target.value === "mood";
+      this.shadowRoot.querySelector("#scene-mood-fields").style.display = this._sceneUseMood ? "block" : "none";
+      this.shadowRoot.querySelector("#scene-manual-fields").style.display = this._sceneUseMood ? "none" : "block";
+    });
+    this.shadowRoot.querySelector("#scene-mood-select").addEventListener("change", (ev) => {
+      this._sceneMood = ev.target.value;
+    });
+    this.shadowRoot.querySelector("#scene-hue-input").addEventListener("input", (ev) => {
+      this._sceneManualHue = parseFloat(ev.target.value);
+    });
+    this.shadowRoot.querySelector("#scene-sat-input").addEventListener("input", (ev) => {
+      this._sceneManualSat = parseFloat(ev.target.value);
+    });
+    this.shadowRoot.querySelector("#scene-bri-input").addEventListener("input", (ev) => {
+      this._sceneManualBri = parseFloat(ev.target.value);
+    });
+    this.shadowRoot.querySelector("#scene-scheme-select").addEventListener("change", (ev) => {
+      this._sceneScheme = ev.target.value;
+    });
+    this.shadowRoot.querySelector("#generate-scene-btn").addEventListener("click", () => this._generateScene());
+    this.shadowRoot.querySelector("#apply-scene-btn").addEventListener("click", () => this._applyScene());
+    this.shadowRoot.querySelector("#save-ha-scene-btn").addEventListener("click", () => this._saveAsHaScene());
 
     const svg = this.shadowRoot.querySelector("#plan");
     svg.addEventListener("click", (ev) => this._onCanvasClick(ev));
@@ -468,8 +605,10 @@ class AlexSceneStudioPanel extends HTMLElement {
     if (!svg) return;
 
     const lightsCard = this.shadowRoot.querySelector("#lights-card");
+    const sceneCard = this.shadowRoot.querySelector("#scene-card");
     const drawHint = this.shadowRoot.querySelector("#draw-hint");
     if (lightsCard) lightsCard.style.display = this._closed ? "block" : "none";
+    if (sceneCard) sceneCard.style.display = this._closed && this._lights.length ? "block" : "none";
     if (drawHint) {
       drawHint.textContent = this._closed
         ? "Contour terminé. Glisse un point ou une lumière pour la repositionner ; « Recommencer le contour » pour tout retracer."
@@ -492,13 +631,27 @@ class AlexSceneStudioPanel extends HTMLElement {
       )
       .join("");
 
+    // En mode apercu (une proposition vient d'etre generee), les marqueurs
+    // affichent la couleur SUGGEREE plutot que la couleur par role -- pur
+    // affichage, rien n'est envoye a aucune lumiere par ce rendu.
+    const suggestionByEntity = {};
+    if (this._previewMode && this._suggestions) {
+      this._suggestions.forEach((s) => {
+        suggestionByEntity[s.entity_id] = s;
+      });
+    }
+
     const lightMarkers = this._lights
       .map((l, i) => {
-        const color = l.mount_type === "ceiling" ? "#f4a935" : l.mount_type === "wall" ? "#4caf50" : "#e91e63";
+        let color = l.mount_type === "ceiling" ? "#f4a935" : l.mount_type === "wall" ? "#4caf50" : "#e91e63";
+        const sug = suggestionByEntity[l.entity_id];
+        if (sug) {
+          color = sug.color_temp_kelvin != null ? kelvinToCss(sug.color_temp_kelvin) : hsvToCss(sug.hue, sug.saturation, sug.brightness);
+        }
         return `
           <g class="light-marker" data-light-index="${i}" style="cursor:grab;">
-            <circle cx="${l.x}" cy="${l.y}" r="10" fill="${color}" stroke="white" stroke-width="1.5" opacity="0.9" />
-            <text x="${l.x}" y="${l.y + 3}" font-size="9" text-anchor="middle" fill="white" style="pointer-events:none;">${MOUNT_TYPE_ICONS[l.mount_type] || ""}</text>
+            <circle cx="${l.x}" cy="${l.y}" r="10" fill="${color}" stroke="white" stroke-width="1.5" opacity="0.95" />
+            ${!sug ? `<text x="${l.x}" y="${l.y + 3}" font-size="9" text-anchor="middle" fill="white" style="pointer-events:none;">${MOUNT_TYPE_ICONS[l.mount_type] || ""}</text>` : ""}
           </g>`;
       })
       .join("");
@@ -624,6 +777,81 @@ class AlexSceneStudioPanel extends HTMLElement {
         this._loadRooms();
       });
     });
+  }
+
+  async _generateScene() {
+    const payload = {
+      type: "alex_scene_studio/compute_scene",
+      lights: this._lights.map((l) => ({ ...l })),
+      scheme: this._sceneUseMood ? "analogous" : this._sceneScheme, // ignore cote serveur si mood fourni
+    };
+    if (this._sceneUseMood) {
+      payload.mood = this._sceneMood;
+    } else {
+      payload.base_hue = this._sceneManualHue;
+      payload.saturation = this._sceneManualSat;
+      payload.brightness = this._sceneManualBri;
+    }
+
+    const result = await this._hass.callWS(payload);
+    this._suggestions = (result && result.suggestions) || [];
+    this._previewMode = true;
+    this._renderCanvas();
+    this._renderScenePreviewList();
+  }
+
+  _renderScenePreviewList() {
+    const list = this.shadowRoot.querySelector("#scene-preview-list");
+    const applyActions = this.shadowRoot.querySelector("#scene-apply-actions");
+    if (!list) return;
+
+    if (!this._suggestions) {
+      list.innerHTML = "";
+      if (applyActions) applyActions.style.display = "none";
+      return;
+    }
+
+    list.innerHTML = this._suggestions
+      .map((s) => {
+        const st = this._hass.states[s.entity_id];
+        const name = (st && st.attributes && st.attributes.friendly_name) || s.entity_id;
+        const swatch = s.color_temp_kelvin != null ? kelvinToCss(s.color_temp_kelvin) : hsvToCss(s.hue, s.saturation, s.brightness);
+        const detail =
+          s.color_temp_kelvin != null
+            ? `${s.color_temp_kelvin} K`
+            : `teinte ${Math.round(s.hue)}°, sat ${Math.round(s.saturation)}%`;
+        return `
+          <div class="light-item">
+            <span style="width:16px;height:16px;border-radius:4px;background:${swatch};flex:0 0 16px;"></span>
+            <span style="flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">${escapeHtml(name)}</span>
+            <span style="color:var(--secondary-text-color);">${detail}, lum. ${s.brightness}</span>
+          </div>`;
+      })
+      .join("");
+
+    if (applyActions) applyActions.style.display = "flex";
+  }
+
+  async _applyScene() {
+    if (!this._suggestions || !this._suggestions.length) return;
+    await this._hass.callWS({ type: "alex_scene_studio/apply_scene", suggestions: this._suggestions });
+  }
+
+  async _saveAsHaScene() {
+    if (!this._suggestions || !this._suggestions.length) return;
+    const nameInput = this.shadowRoot.querySelector("#ha-scene-name");
+    const sceneName = (nameInput.value || this._roomName || "Alex Scene Studio").trim();
+    // La sauvegarde capture les etats ACTUELS des lumieres -- s'assurer
+    // qu'elles refletent bien la proposition avant de creer la scene.
+    await this._applyScene();
+    const result = await this._hass.callWS({
+      type: "alex_scene_studio/save_as_ha_scene",
+      scene_name: sceneName,
+      entity_ids: this._suggestions.map((s) => s.entity_id),
+    });
+    if (result && result.scene_entity_id) {
+      alert(`Scène enregistrée : ${result.scene_entity_id}`);
+    }
   }
 
   async _saveRoom() {

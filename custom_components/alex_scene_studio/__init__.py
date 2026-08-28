@@ -1,10 +1,13 @@
 """L'integration Alex Scene Studio.
 
 Phase 1 : modele de donnees + stockage des pieces (contour polygonal +
-lumieres positionnees). L'algorithme d'harmonie et l'application des
-suggestions aux vraies lumieres viendront dans une phase ulterieure -- cette
-version ne fait que dessiner/sauvegarder/charger des pieces, rien n'est
-encore envoye a aucune lumiere.
+lumieres positionnees).
+Phase 2 (celle-ci) : calcul d'une proposition de scene harmonieuse
+(harmony.py) a partir d'une piece, avec lecture EN DIRECT des capacites
+reelles de chaque lumiere (jamais mise en cache) ; application aux vraies
+lumieres seulement sur demande explicite ; sauvegarde optionnelle en tant
+que vraie scene HA (service natif scene.create, snapshot des etats tout
+juste appliques -- pas de stockage maison pour ca).
 
 Stockage : Store natif HA (.storage/), une bibliotheque de pieces
 {room_id: {name, points, lights}}.
@@ -13,6 +16,8 @@ from __future__ import annotations
 
 import logging
 import os
+import random
+import re
 import uuid
 from dataclasses import asdict, dataclass, field
 
@@ -23,9 +28,14 @@ from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers.storage import Store
 
+from . import harmony
 from .const import DOMAIN, DIRECTION_TYPES, MOUNT_TYPES, PANEL_ICON, PANEL_TITLE, PANEL_URL_PATH, STORAGE_KEY, STORAGE_VERSION
 
 _LOGGER = logging.getLogger(__name__)
+
+# Modes de couleur HA qui impliquent une capacite RGB reelle -- le reste
+# (color_temp seul, brightness seule, onoff) n'en fait pas partie.
+_COLOR_CAPABLE_MODES = {"hs", "rgb", "rgbw", "rgbww", "xy"}
 
 
 @dataclass
@@ -69,6 +79,35 @@ DELETE_ROOM_SCHEMA = {vol.Required("type"): f"{DOMAIN}/delete_room", vol.Require
 
 GET_ROOMS_SCHEMA = {vol.Required("type"): f"{DOMAIN}/get_rooms"}
 
+COMPUTE_SCENE_SCHEMA = {
+    vol.Required("type"): f"{DOMAIN}/compute_scene",
+    vol.Required("lights"): [LIGHT_SCHEMA],
+    vol.Required("scheme"): vol.In(["complementary", "analogous", "triadic"]),
+    vol.Optional("mood"): vol.In(list(harmony.MOOD_PRESETS)),
+    vol.Optional("base_hue"): vol.Coerce(float),
+    vol.Optional("saturation"): vol.Coerce(float),
+    vol.Optional("brightness"): vol.Coerce(float),
+}
+
+SUGGESTION_SCHEMA = {
+    vol.Required("entity_id"): str,
+    vol.Required("hue"): vol.Coerce(float),
+    vol.Required("saturation"): vol.Coerce(float),
+    vol.Required("brightness"): vol.Coerce(int),
+    vol.Optional("color_temp_kelvin"): vol.Coerce(int),
+}
+
+APPLY_SCENE_SCHEMA = {
+    vol.Required("type"): f"{DOMAIN}/apply_scene",
+    vol.Required("suggestions"): [SUGGESTION_SCHEMA],
+}
+
+SAVE_AS_HA_SCENE_SCHEMA = {
+    vol.Required("type"): f"{DOMAIN}/save_as_ha_scene",
+    vol.Required("scene_name"): str,
+    vol.Required("entity_ids"): [str],
+}
+
 
 async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     """Initialise l'integration : stockage + commandes websocket + panel."""
@@ -82,6 +121,9 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
         websocket_api.async_register_command(hass, websocket_get_rooms)
         websocket_api.async_register_command(hass, websocket_save_room)
         websocket_api.async_register_command(hass, websocket_delete_room)
+        websocket_api.async_register_command(hass, websocket_compute_scene)
+        websocket_api.async_register_command(hass, websocket_apply_scene)
+        websocket_api.async_register_command(hass, websocket_save_as_ha_scene)
         hass.data[DOMAIN]["ws_registered"] = True
 
     # L'entry_id courant, pour que les commandes websocket (qui n'ont pas
@@ -130,6 +172,88 @@ async def websocket_delete_room(hass: HomeAssistant, connection, msg) -> None:
     if removed is not None:
         await _async_persist(hass)
     connection.send_result(msg["id"], {"deleted": removed is not None})
+
+
+def _light_capabilities(hass: HomeAssistant, entity_id: str) -> tuple[bool, bool]:
+    """Lit EN DIRECT (jamais mis en cache) les capacites reelles d'une
+    lumiere -- peuvent changer si l'appareil/son firmware change, donc
+    toujours relues au moment du calcul plutot que stockees avec la piece."""
+    state = hass.states.get(entity_id)
+    if state is None:
+        return False, False
+    modes = set(state.attributes.get("supported_color_modes") or [])
+    return bool(modes & _COLOR_CAPABLE_MODES), "color_temp" in modes
+
+
+@websocket_api.websocket_command(COMPUTE_SCENE_SCHEMA)
+@websocket_api.async_response
+async def websocket_compute_scene(hass: HomeAssistant, connection, msg) -> None:
+    """Calcule une proposition -- ne touche a AUCUNE lumiere reelle, se
+    contente de renvoyer les valeurs suggerees pour apercu/ajustement.
+    Prend les lumieres directement dans le message (pas besoin d'avoir deja
+    enregistre la piece -- l'utilisateur peut generer un apercu pendant
+    qu'il dessine, avant de sauvegarder quoi que ce soit)."""
+    light_inputs = []
+    for l in msg["lights"]:
+        supports_color, supports_color_temp = _light_capabilities(hass, l["entity_id"])
+        light_inputs.append(
+            harmony.LightInput(
+                entity_id=l["entity_id"],
+                mount_type=l["mount_type"],
+                direction=l.get("direction", "direct"),
+                supports_color=supports_color,
+                supports_color_temp=supports_color_temp,
+            )
+        )
+
+    try:
+        suggestions = harmony.compute_scene(
+            light_inputs,
+            scheme=msg["scheme"],
+            mood=msg.get("mood"),
+            base_hue=msg.get("base_hue"),
+            saturation=msg.get("saturation"),
+            brightness=msg.get("brightness"),
+            rng=random.Random(),
+        )
+    except ValueError as exc:
+        connection.send_error(msg["id"], "invalid_params", str(exc))
+        return
+
+    connection.send_result(msg["id"], {"suggestions": [asdict(s) for s in suggestions]})
+
+
+@websocket_api.websocket_command(APPLY_SCENE_SCHEMA)
+@websocket_api.async_response
+async def websocket_apply_scene(hass: HomeAssistant, connection, msg) -> None:
+    """Envoie les valeurs (potentiellement ajustees par l'utilisateur apres
+    apercu) aux vraies lumieres. Jamais appele automatiquement -- seulement
+    sur action explicite depuis le panel."""
+    for s in msg["suggestions"]:
+        data = {"entity_id": s["entity_id"], "brightness": s["brightness"]}
+        if s.get("color_temp_kelvin") is not None:
+            data["color_temp_kelvin"] = s["color_temp_kelvin"]
+        else:
+            data["hs_color"] = [s["hue"], s["saturation"]]
+        await hass.services.async_call("light", "turn_on", data, blocking=True)
+    connection.send_result(msg["id"], {"applied": len(msg["suggestions"])})
+
+
+@websocket_api.websocket_command(SAVE_AS_HA_SCENE_SCHEMA)
+@websocket_api.async_response
+async def websocket_save_as_ha_scene(hass: HomeAssistant, connection, msg) -> None:
+    """Cree une vraie scene HA (service natif scene.create) a partir des
+    etats ACTUELS des lumieres listees -- suppose que apply_scene a deja ete
+    appele juste avant, pour que ces etats reflectent bien la proposition
+    validee plutot que ce qui etait allume avant."""
+    scene_id = re.sub(r"[^a-z0-9]+", "_", msg["scene_name"].lower()).strip("_") or "alex_scene_studio_scene"
+    await hass.services.async_call(
+        "scene",
+        "create",
+        {"scene_id": scene_id, "snapshot_entities": msg["entity_ids"]},
+        blocking=True,
+    )
+    connection.send_result(msg["id"], {"scene_entity_id": f"scene.{scene_id}"})
 
 
 async def _async_register_panel(hass: HomeAssistant) -> None:
