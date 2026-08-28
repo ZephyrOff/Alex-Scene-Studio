@@ -41,26 +41,39 @@ posé ; « Recommencer le contour » repart de zéro. **Un point déjà posé pe
 
 ### 2. Positionner les lumières
 
-Une fois le contour fermé, choisis une lumière, son **type de montage**
-(Plafond / Mur / Bureau — sa position physique), son **rôle**
-(Principale / Accentuation / Ambiance — sa fonction dans la hiérarchie
-lumineuse, **indépendante** du montage : un mur peut porter un accent ou
-une ambiance selon l'intention, pas automatiquement l'un ou l'autre juste
-parce qu'il est mural), son **importance** (0-1, son poids au sein de son
-rôle), sa **hauteur** (en mètres) et sa **direction** (Direct / Indirect —
-une source visible vs. une lumière rebondie sur une surface), puis clique à
-l'intérieur du contour pour la placer. **Une lumière déjà placée peut être
-glissée** directement dans le plan pour la repositionner — si elle est
-déposée hors du contour, elle revient automatiquement à sa position
-précédente. Tous ces réglages restent modifiables après coup, directement
-dans la liste des lumières placées.
+Une fois le contour fermé, choisis une lumière, précise si elle est en
+**couleur (RGB)** ou **blanc uniquement** (choix explicite — plus fiable
+qu'une détection automatique des capacités, qui s'est avérée peu fiable en
+pratique), son **type de montage** (Plafond / Mur / Bureau — sa position
+physique), son **importance** (0-1, son poids au sein de son rôle), sa
+**hauteur** (en mètres) et sa **direction** (Direct / Indirect — une source
+visible vs. une lumière rebondie sur une surface), puis clique à l'intérieur
+du contour pour la placer.
+
+Le **rôle** (Principale / Accentuation / Ambiance — sa fonction dans la
+hiérarchie lumineuse) se **déduit automatiquement** du type de montage et de
+la direction, affiché en lecture seule dans le formulaire et dans la liste
+des lumières placées — pas besoin de le choisir toi-même :
+
+| Montage | Direct | Indirect |
+|---|---|---|
+| Plafond | Principale | Ambiance |
+| Mur | Accentuation | Ambiance |
+| Bureau | Principale | Ambiance |
+
+**Une lumière déjà placée peut être glissée** directement dans le plan pour
+la repositionner — si elle est déposée hors du contour, elle revient
+automatiquement à sa position précédente. Tous ces réglages restent
+modifiables après coup, directement dans la liste des lumières placées.
 
 ### 3. Générer une scène harmonieuse
 
 Une fois au moins une lumière placée, la section « Scène harmonieuse »
 apparaît. Deux modes :
 
-- **Ambiance prédéfinie** — Énergique, Détente, Concentration, ou Lecture.
+- **Ambiance prédéfinie** — huit ambiances au total : Énergique, Détente,
+  Concentration, Lecture, Quotidien, Cinéma, Soirée, et Nuit (les quatre
+  dernières reprennent directement les exemples du document de conception).
   Chacune fixe une plage de teinte de départ, une saturation, une intensité
   globale, un niveau de contraste, une température de blanc de base, et le
   schéma chromatique le plus adapté. Une teinte différente est tirée dans
@@ -83,6 +96,11 @@ de conception détaillé sur l'éclairage harmonieux) combine :
   l'amplitude réelle : contraste faible = les trois rôles se rapprochent
   (rendu uniforme, façon quotidien) ; contraste élevé = pleine séparation
   (rendu marqué, façon soirée).
+- **Reshape par ambiance** — certaines ambiances (Cinéma notamment) vont
+  plus loin que le contraste : elles **inversent** carrément la hiérarchie
+  habituelle (fonctionnel presque éteint, ambiance dominante — « fonctionnel
+  très faible, ambiance présente »), ce que le seul contraste ne peut pas
+  produire (il ne fait varier que l'amplitude, jamais l'ordre des rôles).
 - **Importance individuelle** — une lumière moins importante au sein de
   son rôle reste allumée de façon cohérente, mais avec moins de poids
   visuel (jamais réduite à l'extinction, juste plus discrète).
@@ -126,6 +144,13 @@ intégration).
 
 ## Notes techniques
 
+- Les capacités couleur d'une lumière (RGB ou blanc uniquement) sont
+  désormais un **choix explicite** de l'utilisateur (`light_type`), pas une
+  détection automatique via `supported_color_modes` — cette dernière
+  s'était avérée peu fiable en pratique (des lumières RGB confirmées ne
+  recevaient jamais de couleur). Le champ reste pré-rempli à titre
+  indicatif à partir des capacités détectées au moment du placement, mais
+  c'est toujours la valeur choisie qui fait foi pour le calcul.
 - Les coordonnées du plan sont stockées dans l'espace utilisateur du SVG
   (viewBox fixe 800×500), pas en pixels d'écran bruts — le plan reste
   cohérent quelle que soit la taille de la fenêtre/de l'appareil utilisé

@@ -96,6 +96,57 @@ MOOD_PRESETS = {
         "contrast": 0.4,
         "white_temperature": 3000,
     },
+    # Les quatre ambiances suivantes reprennent directement les exemples de
+    # la section 20 du document de conception.
+    "quotidien": {
+        # "lumiere principale dominante, couleurs reduites" -- contraste
+        # faible (uniforme), tres peu sature, la hierarchie normale
+        # (principale > accent > ambiance) suffit sans avoir besoin d'etre
+        # reshapee.
+        "hue_range": (190, 210),
+        "saturation": 15,
+        "global_intensity": 1.0,
+        "scheme": "analogous",
+        "contrast": 0.25,
+        "white_temperature": 4000,
+        "role_multiplier": {"primary": 1.0, "accent": 0.8, "ambient": 0.6},
+    },
+    "cinema": {
+        # "fonctionnel tres faible, ambiance presente" -- hierarchie
+        # INVERSEE (le role_multiplier fait le travail que le contraste
+        # seul ne peut pas faire : contraste ne fait QUE varier
+        # l'amplitude, jamais l'ordre des roles).
+        "hue_range": (220, 260),
+        "saturation": 50,
+        "global_intensity": 0.5,
+        "scheme": "analogous",
+        "contrast": 0.9,
+        "white_temperature": 2400,
+        "role_multiplier": {"primary": 0.15, "accent": 0.5, "ambient": 1.4},
+    },
+    "soiree": {
+        # "accents et couleurs plus presents" -- schema triadique (plus de
+        # couleurs simultanees que les autres ambiances), accent renforce.
+        "hue_range": (280, 340),
+        "saturation": 80,
+        "global_intensity": 0.85,
+        "scheme": "triadic",
+        "contrast": 0.7,
+        "white_temperature": 2700,
+        "role_multiplier": {"primary": 0.7, "accent": 1.3, "ambient": 1.1},
+    },
+    "nuit": {
+        # "tres faible intensite, temperatures chaudes" -- intensite
+        # globale la plus basse de toutes les ambiances, teinte tres chaude,
+        # kelvin de base tres bas.
+        "hue_range": (10, 25),
+        "saturation": 60,
+        "global_intensity": 0.25,
+        "scheme": "analogous",
+        "contrast": 0.3,
+        "white_temperature": 2200,
+        "role_multiplier": {"primary": 0.5, "accent": 0.7, "ambient": 1.0},
+    },
 }
 
 
@@ -105,9 +156,8 @@ class LightInput:
     une proposition."""
 
     entity_id: str
-    role: str  # "primary" | "accent" | "ambient"
-    position: str = "ceiling"  # "ceiling" | "wall" | "furniture" | "floor" -- informatif pour l'instant
-    direction: str = "direct"  # "direct" | "indirect"
+    position: str = "ceiling"  # "ceiling" | "wall" | "desk" | "furniture" | "floor" -- determine le role, voir derive_role
+    direction: str = "direct"  # "direct" | "indirect" -- determine aussi le role
     importance: float = 0.7  # 0-1
     supports_color: bool = True
     supports_color_temp: bool = False
@@ -120,6 +170,34 @@ class LightSuggestion:
     saturation: float
     brightness: int
     color_temp_kelvin: int | None = None
+
+
+# Le role (principale/accentuation/ambiance) se DEDUIT desormais de la
+# position physique et de la direction, plutot que d'etre choisi a la main
+# -- l'utilisateur n'a plus qu'a decrire OU est la lumiere et comment elle
+# eclaire, pas a interpreter lui-meme sa fonction. Table de correspondance :
+# plafond/bureau en direct restent fonctionnels (principale) ; un mur en
+# direct attire l'attention (accentuation) ; tout ce qui est indirect sert
+# l'ambiance (rebondi, jamais la fonction principale de voir).
+_ROLE_FROM_POSITION_DIRECTION = {
+    ("ceiling", "direct"): "primary",
+    ("ceiling", "indirect"): "ambient",
+    ("wall", "direct"): "accent",
+    ("wall", "indirect"): "ambient",
+    ("desk", "direct"): "primary",
+    ("desk", "indirect"): "ambient",
+    ("furniture", "direct"): "accent",
+    ("furniture", "indirect"): "ambient",
+    ("floor", "direct"): "accent",
+    ("floor", "indirect"): "ambient",
+}
+
+
+def derive_role(position: str, direction: str) -> str:
+    """Deduit le role fonctionnel a partir de la position physique et de la
+    direction. Repli sur "primary" pour toute combinaison non prevue,
+    plutot que d'echouer."""
+    return _ROLE_FROM_POSITION_DIRECTION.get((position, direction), "primary")
 
 
 def _hue_scheme(base_hue: float, scheme: str) -> list[float]:
@@ -173,12 +251,21 @@ def compute_scene(
     global_intensity: float | None = None,
     contrast: float | None = None,
     white_temperature: float | None = None,
+    role_multiplier: dict[str, float] | None = None,
     rng: random.Random | None = None,
 ) -> list[LightSuggestion]:
     """Calcule une proposition pour chaque lumiere. Soit `mood` (pioche une
     teinte au hasard dans sa plage a chaque appel, les autres parametres
-    de scene viennent du preset), soit les parametres manuels fournis
-    explicitement (`base_hue` obligatoire dans ce cas)."""
+    de scene -- y compris `role_multiplier` -- viennent du preset), soit
+    les parametres manuels fournis explicitement (`base_hue` obligatoire
+    dans ce cas).
+
+    `role_multiplier` : {role: facteur} applique APRES le calcul normal de
+    luminosite par role -- permet a une ambiance de RESHAPER la hierarchie,
+    pas seulement d'en faire varier l'amplitude (contrairement au
+    contraste). Necessaire par exemple pour "cinema" : fonctionnel presque
+    eteint, ambiance dominante -- un ordre INVERSE de la hierarchie
+    habituelle, que le seul contraste ne peut pas produire."""
     rng = rng or random.Random()
 
     if mood is not None:
@@ -191,6 +278,7 @@ def compute_scene(
         resolved_intensity = preset["global_intensity"]
         resolved_contrast = preset["contrast"]
         resolved_white_temp = preset["white_temperature"]
+        resolved_role_mult = preset.get("role_multiplier", {})
         scheme = preset["scheme"]
     else:
         if base_hue is None:
@@ -200,16 +288,18 @@ def compute_scene(
         resolved_intensity = global_intensity if global_intensity is not None else 1.0
         resolved_contrast = contrast if contrast is not None else 0.6
         resolved_white_temp = white_temperature if white_temperature is not None else 2700.0
+        resolved_role_mult = role_multiplier or {}
 
     hue_slots = _hue_scheme(resolved_hue, scheme)
 
     suggestions: list[LightSuggestion] = []
     for light in lights:
-        role = light.role if light.role in ROLES else "primary"
+        role = derive_role(light.position, light.direction)
 
         hue = _role_hue(role, hue_slots)
         sat = ROLE_BASE_SATURATION[role] * (resolved_sat / 60.0)  # 60 = saturation de reference "neutre"
         bri = _role_brightness(role, resolved_contrast, resolved_intensity)
+        bri *= resolved_role_mult.get(role, 1.0)
 
         # Importance : une lumiere moins importante au sein de son role
         # reste allumee de facon coherente, mais avec moins de poids visuel

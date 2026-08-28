@@ -29,14 +29,9 @@ from homeassistant.core import HomeAssistant
 from homeassistant.helpers.storage import Store
 
 from . import harmony
-from .const import DOMAIN, DIRECTION_TYPES, MOUNT_TYPES, PANEL_ICON, PANEL_TITLE, PANEL_URL_PATH, ROLES, STORAGE_KEY, STORAGE_VERSION
+from .const import DOMAIN, DIRECTION_TYPES, MOUNT_TYPES, PANEL_ICON, PANEL_TITLE, PANEL_URL_PATH, STORAGE_KEY, STORAGE_VERSION
 
 _LOGGER = logging.getLogger(__name__)
-
-# Modes de couleur HA qui impliquent une capacite RGB reelle -- le reste
-# (color_temp seul, brightness seule, onoff) n'en fait pas partie.
-_COLOR_CAPABLE_MODES = {"hs", "rgb", "rgbw", "rgbww", "xy"}
-
 
 @dataclass
 class LightPosition:
@@ -67,8 +62,12 @@ LIGHT_SCHEMA = {
     vol.Required("mount_type"): vol.In(MOUNT_TYPES),
     vol.Optional("height", default=2.2): vol.Coerce(float),
     vol.Optional("direction", default="direct"): vol.In(DIRECTION_TYPES),
-    vol.Optional("role", default="primary"): vol.In(ROLES),
     vol.Optional("importance", default=0.7): vol.All(vol.Coerce(float), vol.Range(min=0, max=1)),
+    # Choix EXPLICITE de l'utilisateur plutot qu'une detection automatique
+    # via supported_color_modes -- cette derniere s'est averee peu fiable en
+    # pratique (des lumieres RGB confirmees ne recevaient jamais de
+    # couleur). Source de verite unique desormais.
+    vol.Optional("light_type", default="color"): vol.In(("color", "white")),
 }
 
 SAVE_ROOM_SCHEMA = {
@@ -186,17 +185,6 @@ async def websocket_delete_room(hass: HomeAssistant, connection, msg) -> None:
     connection.send_result(msg["id"], {"deleted": removed is not None})
 
 
-def _light_capabilities(hass: HomeAssistant, entity_id: str) -> tuple[bool, bool]:
-    """Lit EN DIRECT (jamais mis en cache) les capacites reelles d'une
-    lumiere -- peuvent changer si l'appareil/son firmware change, donc
-    toujours relues au moment du calcul plutot que stockees avec la piece."""
-    state = hass.states.get(entity_id)
-    if state is None:
-        return False, False
-    modes = set(state.attributes.get("supported_color_modes") or [])
-    return bool(modes & _COLOR_CAPABLE_MODES), "color_temp" in modes
-
-
 @websocket_api.websocket_command(COMPUTE_SCENE_SCHEMA)
 @websocket_api.async_response
 async def websocket_compute_scene(hass: HomeAssistant, connection, msg) -> None:
@@ -207,16 +195,19 @@ async def websocket_compute_scene(hass: HomeAssistant, connection, msg) -> None:
     qu'il dessine, avant de sauvegarder quoi que ce soit)."""
     light_inputs = []
     for l in msg["lights"]:
-        supports_color, supports_color_temp = _light_capabilities(hass, l["entity_id"])
+        # Choix explicite de l'utilisateur (light_type) plutot que la
+        # detection live via supported_color_modes, qui s'est averee peu
+        # fiable en pratique -- une lumiere confirmee RGB ne recevait
+        # jamais de couleur avec l'ancienne approche.
+        is_color = l.get("light_type", "color") == "color"
         light_inputs.append(
             harmony.LightInput(
                 entity_id=l["entity_id"],
-                role=l.get("role", "primary"),
                 position=l["mount_type"],
                 direction=l.get("direction", "direct"),
                 importance=l.get("importance", 0.7),
-                supports_color=supports_color,
-                supports_color_temp=supports_color_temp,
+                supports_color=is_color,
+                supports_color_temp=not is_color,
             )
         )
 

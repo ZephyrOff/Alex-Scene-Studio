@@ -83,6 +83,21 @@ function snapToGrid(v) {
 
 const MOUNT_TYPE_LABELS = { ceiling: "Plafond", wall: "Mur", desk: "Bureau" };
 const ROLE_LABELS = { primary: "Principale", accent: "Accentuation", ambient: "Ambiance" };
+
+// Miroir JS de harmony.derive_role (Python) -- uniquement pour l'apercu
+// live dans le formulaire de placement. Le calcul qui compte reellement
+// pour la scene reste fait cote serveur, dans compute_scene.
+const ROLE_FROM_POSITION_DIRECTION = {
+  "ceiling|direct": "primary",
+  "ceiling|indirect": "ambient",
+  "wall|direct": "accent",
+  "wall|indirect": "ambient",
+  "desk|direct": "primary",
+  "desk|indirect": "ambient",
+};
+function deriveRole(position, direction) {
+  return ROLE_FROM_POSITION_DIRECTION[`${position}|${direction}`] || "primary";
+}
 const MOUNT_TYPE_ICONS = { ceiling: "\u2B24", wall: "\u25A0", desk: "\u25B2" }; // cercle / carre / triangle plein, distinction visuelle rapide sans dependre d'icones externes
 
 class AlexSceneStudioPanel extends HTMLElement {
@@ -107,7 +122,7 @@ class AlexSceneStudioPanel extends HTMLElement {
     this._pendingMountType = "ceiling";
     this._pendingHeight = 2.2; // metres, valeur de depart raisonnable (hauteur sous plafond courante)
     this._pendingDirection = "direct";
-    this._pendingRole = "primary"; // "primary" | "accent" | "ambient" -- role fonctionnel, independant de mount_type
+    this._pendingLightType = "color"; // "color" | "white" -- choix explicite, plus fiable qu'une detection automatique
     this._pendingImportance = 0.7; // 0-1
 
     // Glisser-depose : point de mur ou lumiere en cours de deplacement.
@@ -175,7 +190,7 @@ class AlexSceneStudioPanel extends HTMLElement {
     this._pendingMountType = "ceiling";
     this._pendingHeight = 2.2;
     this._pendingDirection = "direct";
-    this._pendingRole = "primary";
+    this._pendingLightType = "color";
     this._pendingImportance = 0.7;
     this._dragging = null;
     this._suggestions = null;
@@ -187,12 +202,12 @@ class AlexSceneStudioPanel extends HTMLElement {
     this._roomName = room.name;
     this._points = room.points.map((p) => ({ x: p.x, y: p.y }));
     this._closed = this._points.length >= 3;
-    // height/direction/role/importance : repli sur des valeurs par defaut
-    // pour les pieces enregistrees avant l'ajout de ces champs.
+    // height/direction/light_type/importance : repli sur des valeurs par
+    // defaut pour les pieces enregistrees avant l'ajout de ces champs.
     this._lights = room.lights.map((l) => ({
       height: 2.2,
       direction: "direct",
-      role: "primary",
+      light_type: "color",
       importance: 0.7,
       ...l,
     }));
@@ -327,19 +342,18 @@ class AlexSceneStudioPanel extends HTMLElement {
               <select id="entity-select"></select>
             </div>
             <div class="row">
+              <label>Couleur/Blanc</label>
+              <select id="light-type-select">
+                <option value="color">Couleur (RGB)</option>
+                <option value="white">Blanc uniquement</option>
+              </select>
+            </div>
+            <div class="row">
               <label>Type</label>
               <select id="mount-select">
                 <option value="ceiling">Plafond</option>
                 <option value="wall">Mur</option>
                 <option value="desk">Bureau</option>
-              </select>
-            </div>
-            <div class="row">
-              <label>Rôle</label>
-              <select id="role-select">
-                <option value="primary">Principale</option>
-                <option value="accent">Accentuation</option>
-                <option value="ambient">Ambiance</option>
               </select>
             </div>
             <div class="row">
@@ -357,11 +371,16 @@ class AlexSceneStudioPanel extends HTMLElement {
                 <option value="indirect">Indirect</option>
               </select>
             </div>
+            <div class="row">
+              <label>Rôle calculé</label>
+              <span id="derived-role-preview" style="font-weight:600;"></span>
+            </div>
             <div class="hint">
-              Le <strong>rôle</strong> (principale/accentuation/ambiance) détermine sa fonction dans la
-              hiérarchie lumineuse — indépendant du type de montage : un mur peut porter un accent ou une
-              ambiance selon l'intention. Choisis tes réglages ci-dessus, puis clique dans le contour pour
-              placer la lumière. Une fois placée, glisse-la directement dans le plan pour la repositionner.
+              Le <strong>rôle</strong> (principale/accentuation/ambiance) se déduit automatiquement du type
+              de montage et de la direction — pas besoin de le choisir toi-même. Précise si la lumière est
+              en couleur ou blanc uniquement (plus fiable qu'une détection automatique). Choisis tes
+              réglages ci-dessus, puis clique dans le contour pour placer la lumière. Une fois placée,
+              glisse-la directement dans le plan pour la repositionner.
             </div>
             <div id="lights-list" style="margin-top:12px;"></div>
           </div>
@@ -383,6 +402,10 @@ class AlexSceneStudioPanel extends HTMLElement {
                   <option value="detente">Détente</option>
                   <option value="concentration">Concentration</option>
                   <option value="lecture">Lecture</option>
+                  <option value="quotidien">Quotidien</option>
+                  <option value="cinema">Cinéma</option>
+                  <option value="soiree">Soirée</option>
+                  <option value="nuit">Nuit</option>
                 </select>
               </div>
             </div>
@@ -474,12 +497,23 @@ class AlexSceneStudioPanel extends HTMLElement {
     });
     this.shadowRoot.querySelector("#entity-select").addEventListener("change", (ev) => {
       this._pendingEntity = ev.target.value;
+      // Pre-remplissage indicatif a partir des capacites live de
+      // l'entite -- confort, pas une source de verite : le champ reste
+      // visible et modifiable juste apres, vu que cette detection s'est
+      // averee peu fiable pour decider seule.
+      const st = this._hass.states[this._pendingEntity];
+      const modes = (st && st.attributes && st.attributes.supported_color_modes) || [];
+      const looksColorCapable = modes.some((m) => ["hs", "rgb", "rgbw", "rgbww", "xy"].includes(m));
+      this._pendingLightType = looksColorCapable ? "color" : "white";
+      const typeSelect = this.shadowRoot.querySelector("#light-type-select");
+      if (typeSelect) typeSelect.value = this._pendingLightType;
+    });
+    this.shadowRoot.querySelector("#light-type-select").addEventListener("change", (ev) => {
+      this._pendingLightType = ev.target.value;
     });
     this.shadowRoot.querySelector("#mount-select").addEventListener("change", (ev) => {
       this._pendingMountType = ev.target.value;
-    });
-    this.shadowRoot.querySelector("#role-select").addEventListener("change", (ev) => {
-      this._pendingRole = ev.target.value;
+      this._updateDerivedRolePreview();
     });
     this.shadowRoot.querySelector("#importance-input").addEventListener("input", (ev) => {
       const v = parseFloat(ev.target.value);
@@ -491,8 +525,10 @@ class AlexSceneStudioPanel extends HTMLElement {
     });
     this.shadowRoot.querySelector("#direction-select").addEventListener("change", (ev) => {
       this._pendingDirection = ev.target.value;
+      this._updateDerivedRolePreview();
     });
     this.shadowRoot.querySelector("#save-room-btn").addEventListener("click", () => this._saveRoom());
+    this._updateDerivedRolePreview();
 
     this.shadowRoot.querySelector("#scene-mode-select").addEventListener("change", (ev) => {
       this._sceneUseMood = ev.target.value === "mood";
@@ -532,6 +568,17 @@ class AlexSceneStudioPanel extends HTMLElement {
 
     this._populateEntitySelect();
     this._renderCanvas();
+  }
+
+  // Affiche, purement a titre indicatif, le role que le serveur deduira
+  // reellement (mount_type + direction) -- aucun impact sur les donnees
+  // envoyees, juste pour que l'utilisateur voie l'effet de ses choix avant
+  // de placer la lumiere.
+  _updateDerivedRolePreview() {
+    const el = this.shadowRoot.querySelector("#derived-role-preview");
+    if (!el) return;
+    const role = deriveRole(this._pendingMountType, this._pendingDirection);
+    el.textContent = ROLE_LABELS[role] || role;
   }
 
   _populateEntitySelect() {
@@ -602,7 +649,7 @@ class AlexSceneStudioPanel extends HTMLElement {
       mount_type: this._pendingMountType,
       height: this._pendingHeight,
       direction: this._pendingDirection,
-      role: this._pendingRole,
+      light_type: this._pendingLightType,
       importance: this._pendingImportance,
     });
     this._renderCanvas();
@@ -746,17 +793,17 @@ class AlexSceneStudioPanel extends HTMLElement {
       .map((l, i) => {
         const st = this._hass.states[l.entity_id];
         const name = (st && st.attributes && st.attributes.friendly_name) || l.entity_id;
-        const role = l.role || "primary";
+        const lightType = l.light_type || "color";
         const importance = l.importance != null ? l.importance : 0.7;
+        const derivedRole = deriveRole(l.mount_type, l.direction || "direct");
         return `
           <div class="light-item" data-index="${i}" style="flex-wrap:wrap;">
             <span>${MOUNT_TYPE_ICONS[l.mount_type] || ""}</span>
             <span style="flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">${escapeHtml(name)}</span>
-            <span style="color:var(--secondary-text-color);">(${MOUNT_TYPE_LABELS[l.mount_type] || l.mount_type})</span>
-            <select class="light-role" data-index="${i}" style="flex:0 0 110px;" title="Rôle">
-              <option value="primary" ${role === "primary" ? "selected" : ""}>Principale</option>
-              <option value="accent" ${role === "accent" ? "selected" : ""}>Accentuation</option>
-              <option value="ambient" ${role === "ambient" ? "selected" : ""}>Ambiance</option>
+            <span style="color:var(--secondary-text-color);">(${MOUNT_TYPE_LABELS[l.mount_type] || l.mount_type} · ${ROLE_LABELS[derivedRole]})</span>
+            <select class="light-type" data-index="${i}" style="flex:0 0 90px;" title="Couleur/Blanc">
+              <option value="color" ${lightType === "color" ? "selected" : ""}>Couleur</option>
+              <option value="white" ${lightType === "white" ? "selected" : ""}>Blanc</option>
             </select>
             <input type="range" class="light-importance" data-index="${i}" min="0" max="1" step="0.1"
                    value="${importance}" style="width:70px;flex:0 0 70px;" title="Importance (${importance})" />
@@ -770,10 +817,10 @@ class AlexSceneStudioPanel extends HTMLElement {
           </div>`;
       })
       .join("");
-    list.querySelectorAll(".light-role").forEach((el) => {
+    list.querySelectorAll(".light-type").forEach((el) => {
       el.addEventListener("change", (ev) => {
         const idx = parseInt(el.getAttribute("data-index"), 10);
-        this._lights[idx].role = ev.target.value;
+        this._lights[idx].light_type = ev.target.value;
       });
     });
     list.querySelectorAll(".light-importance").forEach((el) => {
