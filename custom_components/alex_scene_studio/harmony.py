@@ -248,6 +248,19 @@ MOOD_PRESETS = {
     "nuit": {"hue_range": (10, 25), "saturation": 60, "global_intensity": 0.25, "scheme": "analogous", "contrast": 0.3, "white_temperature": 2200, "role_multiplier": {"primary": 0.5, "accent": 0.7, "ambient": 1.0}},
 }
 
+# Style de generation -- independant de l'ambiance/des parametres manuels,
+# permet de pousser vers plus de douceur ou plus de punch sans changer de
+# teinte/ambiance. Reponse directe au retour "toujours fade et pas assez
+# lumineux" : les ambiances/parametres manuels fixent la DIRECTION (quelle
+# teinte, quel contraste de hierarchie), ce style en fixe l'INTENSITE
+# chromatique et lumineuse globale, applique en plus, pas a la place.
+GENERATION_STYLES = {
+    "doux": {"saturation_mult": 0.65, "intensity_mult": 0.85},
+    "normal": {"saturation_mult": 1.0, "intensity_mult": 1.0},
+    "dynamique": {"saturation_mult": 1.3, "intensity_mult": 1.15},
+    "explosif": {"saturation_mult": 1.6, "intensity_mult": 1.3},
+}
+
 
 @dataclass
 class ZoneInput:
@@ -299,6 +312,7 @@ def compute_scene(
     white_temperature: float | None = None,
     role_multiplier: dict[str, float] | None = None,
     zones: list[ZoneInput] | None = None,
+    generation_style: str = "normal",
     rng: random.Random | None = None,
 ) -> list[LightSuggestion]:
     """Calcule une proposition pour chaque lumiere, en combinant :
@@ -333,6 +347,13 @@ def compute_scene(
         resolved_contrast = contrast if contrast is not None else 0.6
         resolved_white_temp = white_temperature if white_temperature is not None else 2700.0
         resolved_role_mult = role_multiplier or {}
+
+    # Le style de generation s'applique EN PLUS de l'ambiance/des parametres
+    # manuels, pas a leur place -- fixe l'intensite chromatique/lumineuse
+    # globale independamment de la teinte/du contraste choisis.
+    style = GENERATION_STYLES.get(generation_style, GENERATION_STYLES["normal"])
+    resolved_sat *= style["saturation_mult"]
+    resolved_intensity *= style["intensity_mult"]
 
     direction_sign = rng.choice((1, -1))
     hue_slots = _hue_scheme(resolved_hue, scheme, direction_sign)

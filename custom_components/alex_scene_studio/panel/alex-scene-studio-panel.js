@@ -141,6 +141,10 @@ class AlexSceneStudioPanel extends HTMLElement {
     this._loading = false;
     this._error = null;
 
+    // Vue active du panel -- "room" (editer les pieces) ou "scene" (generer
+    // des scenes sur une piece deja configuree).
+    this._activeView = "room";
+
     // Piece en cours d'edition (pas encore forcement sauvegardee).
     this._editingRoomId = null; // null = nouvelle piece
     this._roomName = "";
@@ -182,6 +186,8 @@ class AlexSceneStudioPanel extends HTMLElement {
     this._sceneManualIntensity = 1.0;
     this._sceneManualContrast = 0.6;
     this._sceneManualWhiteTemp = 2700;
+    this._sceneGenerationStyle = "normal"; // "doux" | "normal" | "dynamique" | "explosif" -- independant du mode mood/manuel
+    this._liveApply = false; // si coche, la generation applique immediatement aux vraies lumieres
     this._suggestions = null; // liste de {entity_id, hue, saturation, brightness, color_temp_kelvin} ou null
     this._previewMode = false;
   }
@@ -363,19 +369,24 @@ class AlexSceneStudioPanel extends HTMLElement {
           <svg viewBox="0 0 24 24"><path d="M3,6H21V8H3V6M3,11H21V13H3V11M3,16H21V18H3V16Z"/></svg>
         </button>
         <h1>Alex Scene Studio</h1>
+        <div class="actions" style="margin:0 12px;">
+          <button class="btn btn-outline" id="nav-room-btn">Pièces</button>
+          <button class="btn btn-outline" id="nav-scene-btn">Scènes</button>
+        </div>
         <button class="btn btn-outline" id="new-room-btn">+ Nouvelle pièce</button>
       </div>
 
       <div class="layout">
         <div class="sidebar">
           <h2 style="font-size:13px;margin:4px 0 10px;color:var(--secondary-text-color);">Pièces enregistrées</h2>
+          <div class="hint" id="sidebar-hint" style="margin-bottom:10px;"></div>
           <div id="room-list"></div>
         </div>
 
         <div class="content">
           <div class="card">
-            <h2>Contour de la pièce</h2>
-            <div class="row">
+            <h2>Plan de la pièce</h2>
+            <div class="row" id="room-name-row">
               <label>Nom</label>
               <input type="text" id="room-name" placeholder="ex. Bureau" />
             </div>
@@ -385,11 +396,13 @@ class AlexSceneStudioPanel extends HTMLElement {
             <div class="hint" id="draw-hint">
               Clique dans le plan pour placer les coins du contour. Clique près du premier point pour refermer.
             </div>
-            <div class="actions" style="margin-top:10px;">
+            <div class="actions" style="margin-top:10px;" id="outline-actions">
               <button class="btn btn-outline" id="undo-point-btn">Annuler le dernier point</button>
               <button class="btn btn-outline" id="reset-outline-btn">Recommencer le contour</button>
             </div>
           </div>
+
+          <div id="view-room">
 
           <div class="card" id="placement-mode-card" style="display:none;">
             <h2>Que place le clic dans le contour ?</h2>
@@ -482,6 +495,14 @@ class AlexSceneStudioPanel extends HTMLElement {
             <div id="zones-list" style="margin-top:12px;"></div>
           </div>
 
+          <div class="actions">
+            <button class="btn btn-primary" id="save-room-btn">Enregistrer la pièce</button>
+          </div>
+
+          </div>
+
+          <div id="view-scene">
+
           <div class="card" id="scene-card" style="display:none;">
             <h2>Scène harmonieuse</h2>
             <div class="row">
@@ -489,6 +510,15 @@ class AlexSceneStudioPanel extends HTMLElement {
               <select id="scene-mode-select">
                 <option value="mood">Ambiance prédéfinie</option>
                 <option value="manual">Teinte libre</option>
+              </select>
+            </div>
+            <div class="row">
+              <label>Style</label>
+              <select id="scene-style-select">
+                <option value="doux">Doux</option>
+                <option value="normal" selected>Normal</option>
+                <option value="dynamique">Dynamique</option>
+                <option value="explosif">Explosif</option>
               </select>
             </div>
             <div id="scene-mood-fields">
@@ -542,6 +572,11 @@ class AlexSceneStudioPanel extends HTMLElement {
                 légèrement selon son rôle, pour rester une famille cohérente plutôt que des écarts abrupts.
               </div>
             </div>
+            <div class="row" style="align-items:center;">
+              <label style="flex:0 0 auto;">Rendu en direct</label>
+              <input type="checkbox" id="live-apply-checkbox" style="width:auto;flex:0 0 auto;" />
+              <span class="hint" style="margin:0;flex:1;">applique immédiatement à la génération, sans passer par « Appliquer »</span>
+            </div>
             <div class="actions" style="margin-top:6px;">
               <button class="btn btn-outline" id="generate-scene-btn">Générer une proposition</button>
             </div>
@@ -557,8 +592,6 @@ class AlexSceneStudioPanel extends HTMLElement {
             </div>
           </div>
 
-          <div class="actions">
-            <button class="btn btn-primary" id="save-room-btn">Enregistrer la pièce</button>
           </div>
         </div>
       </div>
@@ -567,6 +600,9 @@ class AlexSceneStudioPanel extends HTMLElement {
     this.shadowRoot.querySelector("#menu-btn").addEventListener("click", () => {
       this.dispatchEvent(new Event("hass-toggle-menu", { bubbles: true, composed: true }));
     });
+    this.shadowRoot.querySelector("#nav-room-btn").addEventListener("click", () => this._setActiveView("room"));
+    this.shadowRoot.querySelector("#nav-scene-btn").addEventListener("click", () => this._setActiveView("scene"));
+    this._setActiveView(this._activeView);
     this.shadowRoot.querySelector("#new-room-btn").addEventListener("click", () => {
       this._resetEditor();
       this._syncEditorInputs();
@@ -676,6 +712,12 @@ class AlexSceneStudioPanel extends HTMLElement {
     this.shadowRoot.querySelector("#scene-scheme-select").addEventListener("change", (ev) => {
       this._sceneScheme = ev.target.value;
     });
+    this.shadowRoot.querySelector("#scene-style-select").addEventListener("change", (ev) => {
+      this._sceneGenerationStyle = ev.target.value;
+    });
+    this.shadowRoot.querySelector("#live-apply-checkbox").addEventListener("change", (ev) => {
+      this._liveApply = ev.target.checked;
+    });
     this.shadowRoot.querySelector("#generate-scene-btn").addEventListener("click", () => this._generateScene());
     this.shadowRoot.querySelector("#apply-scene-btn").addEventListener("click", () => this._applyScene());
     this.shadowRoot.querySelector("#save-ha-scene-btn").addEventListener("click", () => this._saveAsHaScene());
@@ -694,6 +736,35 @@ class AlexSceneStudioPanel extends HTMLElement {
   // reellement (mount_type + direction) -- aucun impact sur les donnees
   // envoyees, juste pour que l'utilisateur voie l'effet de ses choix avant
   // de placer la lumiere.
+  // Bascule entre la vue "room" (editer les pieces) et "scene" (generer des
+  // scenes sur une piece deja configuree) -- meme etat sous-jacent
+  // (_points/_lights/_zones), seule l'interactivite du plan et les cartes
+  // visibles changent.
+  _setActiveView(view) {
+    this._activeView = view;
+    const viewRoom = this.shadowRoot.querySelector("#view-room");
+    const viewScene = this.shadowRoot.querySelector("#view-scene");
+    const newRoomBtn = this.shadowRoot.querySelector("#new-room-btn");
+    const roomNameRow = this.shadowRoot.querySelector("#room-name-row");
+    const outlineActions = this.shadowRoot.querySelector("#outline-actions");
+    const navRoomBtn = this.shadowRoot.querySelector("#nav-room-btn");
+    const navSceneBtn = this.shadowRoot.querySelector("#nav-scene-btn");
+    const sidebarHint = this.shadowRoot.querySelector("#sidebar-hint");
+
+    if (viewRoom) viewRoom.style.display = view === "room" ? "block" : "none";
+    if (viewScene) viewScene.style.display = view === "scene" ? "block" : "none";
+    if (newRoomBtn) newRoomBtn.style.display = view === "room" ? "inline-block" : "none";
+    if (roomNameRow) roomNameRow.style.display = view === "room" ? "flex" : "none";
+    if (outlineActions) outlineActions.style.display = view === "room" ? "flex" : "none";
+    if (navRoomBtn) navRoomBtn.style.background = view === "room" ? "var(--primary-color, #03a9f4)" : "transparent";
+    if (navSceneBtn) navSceneBtn.style.background = view === "scene" ? "var(--primary-color, #03a9f4)" : "transparent";
+    if (sidebarHint) {
+      sidebarHint.textContent =
+        view === "room" ? "Clique sur une pièce pour l'éditer." : "Clique sur une pièce pour générer une scène dessus.";
+    }
+    this._renderCanvas();
+  }
+
   _updateDerivedRolePreview() {
     const el = this.shadowRoot.querySelector("#derived-role-preview");
     if (!el) return;
@@ -736,6 +807,10 @@ class AlexSceneStudioPanel extends HTMLElement {
   }
 
   _onCanvasClick(ev) {
+    // Plan en lecture seule en vue Scene -- l'edition (contour/lumieres/
+    // zones) ne se fait qu'en vue Room.
+    if (this._activeView !== "room") return;
+
     // Un clic qui suit immediatement un glisser-depose ne doit pas EN PLUS
     // ajouter un point ou placer une lumiere -- sans ce garde-fou, relacher
     // le glissement declenche aussi un "click" fantome au meme endroit.
@@ -804,6 +879,7 @@ class AlexSceneStudioPanel extends HTMLElement {
   // pas perdre le geste si le curseur sort brievement du marqueur.
   // -----------------------------------------------------------------------
   _onMarkerPointerDown(ev, kind, index) {
+    if (this._activeView !== "room") return;
     ev.stopPropagation();
     const source = kind === "point" ? this._points[index] : kind === "zone" ? this._zones[index] : this._lights[index];
     this._dragging = { kind, index, startX: source.x, startY: source.y, moved: false };
@@ -1111,6 +1187,7 @@ class AlexSceneStudioPanel extends HTMLElement {
       lights: this._lights.map(lightPayload),
       zones: this._zones.map(zonePayload),
       scheme: this._sceneUseMood ? "analogous" : this._sceneScheme, // ignore cote serveur si mood fourni
+      generation_style: this._sceneGenerationStyle,
     };
     if (this._sceneUseMood) {
       payload.mood = this._sceneMood;
@@ -1136,6 +1213,12 @@ class AlexSceneStudioPanel extends HTMLElement {
     this._previewMode = !!(this._suggestions && this._suggestions.length);
     this._renderCanvas();
     this._renderScenePreviewList();
+
+    // Rendu en direct : applique immediatement aux vraies lumieres, sans
+    // attendre un clic separe sur "Appliquer".
+    if (this._liveApply && this._suggestions && this._suggestions.length) {
+      await this._applyScene();
+    }
   }
 
   _renderScenePreviewList() {

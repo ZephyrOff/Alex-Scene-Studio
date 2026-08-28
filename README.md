@@ -7,11 +7,19 @@ plus poussé).
 
 ## Ce que fait cette version
 
-- **Éditeur de plan** (Phase 1) — dessiner le contour d'une pièce, positionner
-  des lumières dedans, sauvegarder et recharger.
-- **Système de scène** (Phase 2) — générer une proposition de couleurs
-  harmonieuses pour les lumières d'une pièce, en aperçu ajustable, avant
-  d'appliquer quoi que ce soit ou de sauvegarder en tant que vraie scène HA.
+- **Éditeur de plan** (vue « Pièces ») — dessiner le contour d'une pièce,
+  positionner des lumières et des zones dedans, sauvegarder et recharger.
+- **Système de scène** (vue « Scènes ») — choisir une pièce déjà configurée
+  et générer une proposition de couleurs harmonieuses pour ses lumières, en
+  aperçu ajustable, avant d'appliquer quoi que ce soit ou de sauvegarder en
+  tant que vraie scène HA.
+
+Deux boutons dans l'en-tête (**Pièces** / **Scènes**) basculent entre ces
+deux vues. La liste des pièces dans la barre latérale reste la même dans
+les deux cas — cliquer sur une pièce sert soit à l'éditer (vue Pièces),
+soit à choisir sur quelle pièce générer une scène (vue Scènes). Le plan est
+en **lecture seule** en vue Scènes : on y voit la disposition, mais on ne
+peut pas la modifier — pour ça, il faut repasser en vue Pièces.
 
 ## Installation
 
@@ -77,8 +85,9 @@ Une zone déjà placée peut aussi être glissée pour la repositionner.
 
 ### 4. Générer une scène harmonieuse
 
-Une fois au moins une lumière placée, la section « Scène harmonieuse »
-apparaît. Deux modes :
+Passe en vue **Scènes**, choisis une pièce déjà configurée dans la barre
+latérale. Une fois au moins une lumière placée sur cette pièce, la section
+« Scène harmonieuse » apparaît. Deux modes :
 
 - **Ambiance prédéfinie** — huit ambiances au total : Énergique, Détente,
   Concentration, Lecture, Quotidien, Cinéma, Soirée, et Nuit (les quatre
@@ -92,10 +101,22 @@ apparaît. Deux modes :
   l'intensité globale, le **contraste**, la **température de blanc**, et le
   schéma (complémentaire / analogue / triadique).
 
-Clique sur « Générer une proposition » : **rien n'est envoyé à aucune
-lumière** — le plan affiche juste, pour chaque lumière positionnée, la
-couleur qu'elle recevrait. L'algorithme (reconstruit à partir d'un document
-de conception détaillé sur l'éclairage harmonieux) combine :
+Indépendamment du mode, un sélecteur **Style** (Doux / Normal / Dynamique /
+Explosif) ajuste l'intensité chromatique et lumineuse globale — en plus des
+paramètres ci-dessus, pas à leur place. Utile si le rendu te semble trop
+fade ou pas assez lumineux : « Dynamique »/« Explosif » poussent saturation
+et luminosité vers le haut, quelle que soit l'ambiance ou la teinte choisie.
+
+Une case **Rendu en direct** applique automatiquement la proposition aux
+vraies lumières dès la génération, sans passer par le bouton « Appliquer »
+séparément — pratique pour ajuster à la volée en regardant le résultat réel,
+au prix de changer effectivement l'état des lumières à chaque génération.
+
+Clique sur « Générer une proposition » (ou coche « Rendu en direct » au
+préalable) : sans cette case, **rien n'est envoyé à aucune lumière** — le
+plan affiche juste, pour chaque lumière positionnée, la couleur qu'elle
+recevrait. L'algorithme (reconstruit à partir d'un document de conception
+détaillé sur l'éclairage harmonieux) combine :
 
 - **Hiérarchie par rôle** — principale = luminosité 60-80%, saturation
   faible (fonctionnelle) ; accentuation = 30-50%, porte la teinte

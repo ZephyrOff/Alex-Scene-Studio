@@ -121,6 +121,7 @@ COMPUTE_SCENE_SCHEMA = {
     vol.Optional("global_intensity"): vol.Coerce(float),
     vol.Optional("contrast"): vol.All(vol.Coerce(float), vol.Range(min=0, max=1)),
     vol.Optional("white_temperature"): vol.Coerce(float),
+    vol.Optional("generation_style", default="normal"): vol.In(list(harmony.GENERATION_STYLES)),
 }
 
 SUGGESTION_SCHEMA = {
@@ -272,6 +273,7 @@ async def websocket_compute_scene(hass: HomeAssistant, connection, msg) -> None:
             global_intensity=msg.get("global_intensity"),
             contrast=msg.get("contrast"),
             white_temperature=msg.get("white_temperature"),
+            generation_style=msg.get("generation_style", "normal"),
             zones=zone_inputs,
             rng=random.Random(),
         )
