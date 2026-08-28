@@ -94,7 +94,13 @@ SUGGESTION_SCHEMA = {
     vol.Required("hue"): vol.Coerce(float),
     vol.Required("saturation"): vol.Coerce(float),
     vol.Required("brightness"): vol.Coerce(int),
-    vol.Optional("color_temp_kelvin"): vol.Coerce(int),
+    # vol.Optional rend la CLE optionnelle (absente autorisee), mais
+    # n'autorise pas a elle seule la valeur None quand la cle EST presente --
+    # or dataclasses.asdict() inclut toujours color_temp_kelvin, meme a None
+    # (lumieres RGB qui n'ont pas besoin d'une conversion en kelvin). Sans
+    # vol.Any(None, ...), cette valeur explicitement None se fait rejeter
+    # par vol.Coerce(int) des l'aller-retour Appliquer.
+    vol.Optional("color_temp_kelvin"): vol.Any(None, vol.Coerce(int)),
 }
 
 APPLY_SCENE_SCHEMA = {
