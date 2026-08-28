@@ -206,6 +206,7 @@ async def websocket_compute_scene(hass: HomeAssistant, connection, msg) -> None:
                 position=l["mount_type"],
                 direction=l.get("direction", "direct"),
                 importance=l.get("importance", 0.7),
+                height=l.get("height", 2.2),
                 supports_color=is_color,
                 supports_color_temp=not is_color,
             )

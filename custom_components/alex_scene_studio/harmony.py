@@ -159,6 +159,7 @@ class LightInput:
     position: str = "ceiling"  # "ceiling" | "wall" | "desk" | "furniture" | "floor" -- determine le role, voir derive_role
     direction: str = "direct"  # "direct" | "indirect" -- determine aussi le role
     importance: float = 0.7  # 0-1
+    height: float = 2.2  # metres -- pilote desormais l'interpolation spatiale de la teinte, voir _spatial_hue
     supports_color: bool = True
     supports_color_temp: bool = False
 
@@ -209,16 +210,31 @@ def _hue_scheme(base_hue: float, scheme: str) -> list[float]:
     return [base_hue, (base_hue + 30) % 360, (base_hue - 30) % 360]
 
 
-def _role_hue(role: str, hue_slots: list[float]) -> float:
-    """Principale = teinte de base (tres peu saturee, quasi neutre a
-    l'usage) ; accentuation = teinte DOMINANTE pleinement assumee ;
-    ambiance = teinte SECONDAIRE derivee du schema (section 10 : dominante +
-    eventuelle secondaire, pas une couleur differente par lumiere)."""
-    if role == "accent":
+def _lerp_hue(h1: float, h2: float, t: float) -> float:
+    """Interpolation lineaire entre deux teintes, en suivant le chemin le
+    plus court sur la roue chromatique (jamais le grand contournement --
+    entre 350 et 10 degres, passe par 0, pas par 180)."""
+    diff = ((h2 - h1 + 180) % 360) - 180
+    return (h1 + diff * t) % 360
+
+
+def _spatial_hue(normalized_height: float, hue_slots: list[float]) -> float:
+    """Interpole la teinte le long des points du schema chromatique selon
+    la position verticale RELATIVE de la lumiere dans la piece (0 = la plus
+    basse, 1 = la plus haute) -- inspire de Hue SpatialAware (confirme :
+    une scene coucher de soleil affiche des teintes chaudes en bas et
+    froides en haut, en degrade continu, pas une couleur fixe par groupe de
+    lumieres). Deux lumieres du meme role mais a des hauteurs differentes
+    recoivent donc des teintes differentes, contrairement a la version
+    precedente de cet algorithme."""
+    n = len(hue_slots)
+    if n == 1:
         return hue_slots[0]
-    if role == "ambient":
-        return hue_slots[1 % len(hue_slots)]
-    return hue_slots[0]  # primary
+    scaled = max(0.0, min(1.0, normalized_height)) * (n - 1)
+    lo = int(scaled)
+    hi = min(n - 1, lo + 1)
+    local_t = scaled - lo
+    return _lerp_hue(hue_slots[lo], hue_slots[hi], local_t)
 
 
 def _role_brightness(role: str, contrast: float, global_intensity: float) -> float:
@@ -292,11 +308,19 @@ def compute_scene(
 
     hue_slots = _hue_scheme(resolved_hue, scheme)
 
+    # Plage de hauteurs de la piece (pour normaliser la position verticale
+    # de chaque lumiere entre 0 et 1) -- calculee une seule fois, avant la
+    # boucle par lumiere.
+    heights = [light.height for light in lights]
+    min_height, max_height = (min(heights), max(heights)) if heights else (0.0, 0.0)
+    height_span = max_height - min_height
+
     suggestions: list[LightSuggestion] = []
     for light in lights:
         role = derive_role(light.position, light.direction)
 
-        hue = _role_hue(role, hue_slots)
+        normalized_height = 0.5 if height_span <= 0 else (light.height - min_height) / height_span
+        hue = _spatial_hue(normalized_height, hue_slots)
         sat = ROLE_BASE_SATURATION[role] * (resolved_sat / 60.0)  # 60 = saturation de reference "neutre"
         bri = _role_brightness(role, resolved_contrast, resolved_intensity)
         bri *= resolved_role_mult.get(role, 1.0)

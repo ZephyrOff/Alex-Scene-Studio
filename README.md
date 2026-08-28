@@ -96,6 +96,16 @@ de conception détaillé sur l'éclairage harmonieux) combine :
   l'amplitude réelle : contraste faible = les trois rôles se rapprochent
   (rendu uniforme, façon quotidien) ; contraste élevé = pleine séparation
   (rendu marqué, façon soirée).
+- **Dégradé de teinte selon la hauteur** — inspiré de **Hue SpatialAware**
+  (fonctionnalité réelle de Philips Hue, lancée début 2026) : plutôt qu'une
+  teinte fixe par rôle (deux lumières « accentuation » recevaient
+  auparavant exactement la même couleur, peu importe leur position réelle),
+  la teinte de chaque lumière est désormais **interpolée en continu** selon
+  sa hauteur relative dans la pièce — reproduisant l'exemple typique d'un
+  coucher de soleil chez Hue : teintes chaudes en bas, froides en haut, en
+  dégradé fluide plutôt que par blocs. Deux lumières du même rôle à des
+  hauteurs différentes reçoivent maintenant des teintes différentes ; deux
+  lumières à la même hauteur reçoivent la même teinte.
 - **Reshape par ambiance** — certaines ambiances (Cinéma notamment) vont
   plus loin que le contraste : elles **inversent** carrément la hiérarchie
   habituelle (fonctionnel presque éteint, ambiance dominante — « fonctionnel
@@ -169,15 +179,29 @@ intégration).
   quoi que ce soit.
 - L'algorithme d'harmonie (`harmony.py`) est volontairement indépendant de
   Home Assistant (aucun import `hass`) — testable et relisible isolément.
+- Le dégradé de teinte utilise la **hauteur** comme seul axe spatial pour
+  cette version (reproduit l'exemple « coucher de soleil » de Hue
+  SpatialAware, un dégradé vertical). Une position horizontale (par exemple
+  « chaud d'un côté de la pièce, froid de l'autre ») n'est pas encore prise
+  en compte — Hue combine généralement plusieurs axes selon la scène, mais
+  un seul axe suffisait à corriger le vrai défaut signalé (toutes les
+  lumières d'un même rôle recevaient exactement la même teinte).
+- Cas limite connu : pour le schéma **complémentaire** (les deux teintes
+  sont à exactement 180° l'une de l'autre), l'interpolation à la hauteur
+  médiane exacte choisit arbitrairement l'un des deux chemins possibles sur
+  la roue chromatique (les deux faisant la même longueur) — sans
+  conséquence sur la validité du résultat, juste un choix qui pourrait
+  surprendre si une lumière tombe pile à cette hauteur médiane.
 
 ## À venir (pas encore construit)
 
 - Ajustement individuel de chaque lumière dans l'aperçu (actuellement, la
   proposition s'applique telle quelle — pas encore de curseurs pour
   corriger une lumière précise avant validation).
-- Prise en compte de la hauteur et de la surface éclairée (couleur/texture
-  du mur, section 6 du document de conception) dans le calcul — actuellement
-  la hauteur est stockée mais pas encore utilisée par l'algorithme.
-- Scènes définies par intention plutôt que par ambiance fixe (« Quotidien »,
-  « Cinéma », « Soirée », « Nuit » — section 20 du document) avec variation
-  automatique selon l'heure/la lumière naturelle (section 17).
+- Un axe spatial horizontal en plus de la hauteur (position x/y dans la
+  pièce), pour des scènes du type « chaud d'un côté, froid de l'autre »
+  combinées au dégradé vertical déjà en place.
+- Prise en compte de la surface éclairée (couleur/texture du mur, section 6
+  du document de conception) dans le calcul.
+- Variation automatique selon l'heure/la lumière naturelle (section 17 du
+  document de conception).
